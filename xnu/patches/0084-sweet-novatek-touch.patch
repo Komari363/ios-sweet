@@ -1,0 +1,519 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+index 8e22e59..44eceff 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -95,6 +95,7 @@ SweetGeniSPI::start(IOService *provider)
+ 	fFifoDepth = 0;
+ 	fFifoWidth = 0;
+ 	fTestRuns = 0;
++	fXferCount = 0;
+ 	fPlatformWarned = false;
+ 	if (!IOService::start(provider)) {
+ 		return false;
+@@ -315,8 +316,10 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	if (!configurePins(true) || !configureClock()) {
+ 		return kIOReturnNotReady;
+ 	}
+-	IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
+-	    len, cs, hz, fFifoDepth, fFifoWidth);
++	if (fXferCount++ < 8) {
++		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
++		    len, cs, hz, fFifoDepth, fFifoWidth);
++	}
+ 	writeReg(GENI_M_IRQ_EN, 0);
+ 	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
+ 	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
+index 6a7cc20..1681a27 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.h
++++ b/iokit/Kernel/arm/SweetGeniSPI.h
+@@ -49,6 +49,7 @@ private:
+ 	uint32_t fFifoDepth;
+ 	uint32_t fFifoWidth;
+ 	uint32_t fTestRuns;
++	uint32_t fXferCount;
+ 	bool fPlatformWarned;
+ };
+ 
+diff --git a/iokit/Kernel/arm/SweetNovatekTouch.cpp b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+new file mode 100644
+index 0000000..bc7c907
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -0,0 +1,304 @@
++/*
++ * NABU NT36523 touch provider over SweetGeniSPI.
++ *
++ * Normal touch uses the controller's existing firmware.  The 14-second
++ * firmware update attempt in the Linux driver is deliberately absent; only
++ * a future recovery path should download fw01/fw02.
++ *
++ * The A4.2 provider polls GPIO39 at 8 ms instead of registering the GIC SPI
++ * 583 interrupt.  The SPI packet path is identical to what an IRQ handler
++ * would run; switching to an interrupt source is a later increment.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
++
++#include "SweetNovatekTouch.h"
++#include "SweetGeniSPI.h"
++#include "SweetPlatform.h"
++
++#include <IOKit/IOLib.h>
++#include <IOKit/IOWorkLoop.h>
++#include <IOKit/IOTimerEventSource.h>
++#include <pexpert/pexpert.h>
++
++#define NVT_EVENT_BUF            0x02fe00u
++#define NVT_EVENT_FWINFO         0x78u
++#define NVT_EVENT_RESET_STATE    0x60u
++#define NVT_EVENT_HANDSHAKE      0x51u
++#define NVT_SWRST_N8             0x03f0feu
++#define NVT_PACKET_LEN           65u
++#define NVT_MAX_FINGERS          10u
++#define NVT_IRQ_GPIO             39u
++#define NVT_VDDIO_GPIO           100u
++#define NVT_SPI_HZ               9600000u
++
++extern "C" void sweet_hid_touch(int finger, int down, int x, int y);
++
++OSDefineMetaClassAndStructors(SweetNovatekTouch, IOService);
++
++bool
++SweetNovatekTouch::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	int enable = 1;
++	PE_parse_boot_argn("sweetnovatek", &enable, sizeof(enable));
++	if (!enable) {
++		IOLog("SWEET NVT: disabled by sweetnovatek=0\n");
++		return false;
++	}
++	int forcePoll = 0;
++	PE_parse_boot_argn("sweetnovatek_poll", &forcePoll, sizeof(forcePoll));
++	fForcePoll = forcePoll != 0;
++	fSPI = NULL;
++	fTLMM = NULL;
++	fWorkLoop = NULL;
++	fTimer = NULL;
++	fLock = NULL;
++	fMaxX = 1600;
++	fMaxY = 2560;
++	fPackets = 0;
++	fErrors = 0;
++	fChecksumErrors = 0;
++	for (uint32_t i = 0; i < NVT_MAX_FINGERS; i++) {
++		fDown[i] = false;
++		fX[i] = 0;
++		fY[i] = 0;
++	}
++
++	fLock = IOLockAlloc();
++	if (fLock == NULL || !findProviders()) {
++		IOLog("SWEET NVT: SPI/TLMM provider missing\n");
++		return false;
++	}
++
++	/* VDDIO is a GPIO100 fixed regulator; ABL normally leaves it on, but
++	 * make the state explicit before the first SPI access. */
++	fTLMM->setMux(NVT_VDDIO_GPIO, 0);
++	fTLMM->setPad(NVT_VDDIO_GPIO, 0, 3, true);
++	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
++	/* INT: GPIO input, pull-down; the controller drives it high. */
++	fTLMM->setMux(NVT_IRQ_GPIO, 0);
++	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
++	IODelay(4000);
++
++	if (!readFwInfo()) {
++		IOLog("SWEET NVT: FWINFO read failed; continuing\n");
++	}
++
++	fWorkLoop = IOWorkLoop::workLoop();
++	fTimer = IOTimerEventSource::timerEventSource(this, &SweetNovatekTouch::pollFired);
++	if (fWorkLoop == NULL || fTimer == NULL ||
++	    fWorkLoop->addEventSource(fTimer) != kIOReturnSuccess) {
++		IOLog("SWEET NVT: cannot arm poll timer\n");
++		return false;
++	}
++	fTimer->setTimeoutMS(8);
++	registerService();
++	IOLog("SWEET NVT: ready, %ux%u, poll=%d int=%u\n",
++	    fMaxX, fMaxY, fForcePoll, fTLMM->gpioRead(NVT_IRQ_GPIO));
++	return true;
++}
++
++void
++SweetNovatekTouch::stop(IOService *provider)
++{
++	if (fTimer != NULL) {
++		fTimer->cancelTimeout();
++		if (fWorkLoop != NULL) {
++			fWorkLoop->removeEventSource(fTimer);
++		}
++		fTimer->release();
++		fTimer = NULL;
++	}
++	if (fWorkLoop != NULL) {
++		fWorkLoop->release();
++		fWorkLoop = NULL;
++	}
++	if (fSPI != NULL) {
++		fSPI->release();
++		fSPI = NULL;
++	}
++	if (fTLMM != NULL) {
++		fTLMM->release();
++		fTLMM = NULL;
++	}
++	if (fLock != NULL) {
++		IOLockFree(fLock);
++		fLock = NULL;
++	}
++	IOService::stop(provider);
++}
++
++bool
++SweetNovatekTouch::findProviders()
++{
++	OSPtr<OSDictionary> spiMatch = IOService::serviceMatching("SweetGeniSPI");
++	OSPtr<OSDictionary> tlmmMatch = IOService::serviceMatching("SweetTLMM");
++	if (spiMatch == NULL || tlmmMatch == NULL) {
++		return false;
++	}
++	OSPtr<IOService> spi = IOService::waitForMatchingService(spiMatch.get(),
++	    5ULL * 1000000000ULL);
++	OSPtr<IOService> tlmm = IOService::waitForMatchingService(tlmmMatch.get(),
++	    5ULL * 1000000000ULL);
++	fSPI = OSDynamicCast(SweetGeniSPI, spi.get());
++	fTLMM = OSDynamicCast(SweetTLMM, tlmm.get());
++	if (fSPI == NULL || fTLMM == NULL) {
++		return false;
++	}
++	fSPI->retain();
++	fTLMM->retain();
++	return true;
++}
++
++bool
++SweetNovatekTouch::pageSet(uint32_t addr)
++{
++	uint8_t tx[3] = {
++		0xff, (uint8_t)((addr >> 15) & 0xff), (uint8_t)((addr >> 7) & 0xff)
++	};
++	return fSPI->spiTransfer(tx, NULL, sizeof(tx), NVT_SPI_HZ, 0, 0, 8) ==
++	    kIOReturnSuccess;
++}
++
++bool
++SweetNovatekTouch::readData(uint32_t addr, uint8_t *buf, uint32_t len)
++{
++	if (len == 0 || len > 80 || buf == NULL || !pageSet(addr)) {
++		return false;
++	}
++	uint8_t tx[96] = { 0 };
++	uint8_t rx[96] = { 0 };
++	tx[0] = (uint8_t)(addr & 0x7f);
++	IOReturn ret = fSPI->spiTransfer(tx, rx, len + 2, NVT_SPI_HZ, 0, 0, 8);
++	if (ret != kIOReturnSuccess) {
++		return false;
++	}
++	/* Command echo + one turnaround byte precede the data. */
++	for (uint32_t i = 0; i < len; i++) {
++		buf[i] = rx[i + 2];
++	}
++	return true;
++}
++
++bool
++SweetNovatekTouch::readFwInfo()
++{
++	uint8_t info[40] = { 0 };
++	if (!readData(NVT_EVENT_BUF | NVT_EVENT_FWINFO, info, 39)) {
++		return false;
++	}
++	fFwVer = info[0];
++	fMaxX = (uint32_t)info[4] << 8 | info[5];
++	fMaxY = (uint32_t)info[6] << 8 | info[7];
++	if (fMaxX == 0 || fMaxX > 4095) {
++		fMaxX = 1600;
++	}
++	if (fMaxY == 0 || fMaxY > 4095) {
++		fMaxY = 2560;
++	}
++	IOLog("SWEET NVT: fw=%u xmax=%u ymax=%u xnum=%u ynum=%u sum=%02x\n",
++	    fFwVer, fMaxX, fMaxY, info[2], info[3],
++	    (unsigned)(info[0] + info[1]) & 0xff);
++	if ((uint8_t)(info[0] + info[1]) != 0xff) {
++		IOLog("SWEET NVT: FWINFO checksum bytes do not sum to 0xff\n");
++	}
++	return true;
++}
++
++void
++SweetNovatekTouch::pollFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	SweetNovatekTouch *self = (SweetNovatekTouch *)owner;
++	self->poll();
++	sender->setTimeoutMS(8);
++}
++
++void
++SweetNovatekTouch::poll()
++{
++	if (fSPI == NULL || fTLMM == NULL) {
++		return;
++	}
++	bool asserted = fForcePoll || fTLMM->gpioRead(NVT_IRQ_GPIO);
++	if (asserted) {
++		readPacket();
++	}
++}
++
++void
++SweetNovatekTouch::reportSlot(uint32_t slot, bool down, uint32_t x, uint32_t y)
++{
++	sweet_hid_touch((int)slot, down ? 1 : 0, (int)x, (int)y);
++}
++
++void
++SweetNovatekTouch::readPacket()
++{
++	uint8_t d[NVT_PACKET_LEN] = { 0 };
++	if (!readData(NVT_EVENT_BUF, d, NVT_PACKET_LEN)) {
++		if (++fErrors < 4) {
++			IOLog("SWEET NVT: packet read error %u\n", fErrors);
++		}
++		return;
++	}
++	uint8_t sum = 0;
++	for (uint32_t i = 0; i < 64; i++) {
++		sum += d[i];
++	}
++	if ((uint8_t)(~sum + 1) != d[64]) {
++		if (++fChecksumErrors < 4) {
++			IOLog("SWEET NVT: packet checksum %02x != %02x\n",
++			    (unsigned)(uint8_t)(~sum + 1), d[64]);
++		}
++		return;
++	}
++
++	bool present[NVT_MAX_FINGERS] = { false };
++	uint32_t px[NVT_MAX_FINGERS] = { 0 };
++	uint32_t py[NVT_MAX_FINGERS] = { 0 };
++	for (uint32_t i = 0; i < NVT_MAX_FINGERS; i++) {
++		uint32_t p = i * 6;
++		uint8_t id = d[p] >> 3;
++		uint8_t st = d[p] & 0x7;
++		if (id == 0 || id > NVT_MAX_FINGERS) {
++			continue;
++		}
++		if (st != 1 && st != 2) {
++			continue;
++		}
++		uint32_t x = (uint32_t)d[p + 1] << 4 | (d[p + 3] >> 4);
++		uint32_t y = (uint32_t)d[p + 2] << 4 | (d[p + 3] & 0xf);
++		if (x > fMaxX || y > fMaxY) {
++			continue;
++		}
++		present[i] = true;
++		px[i] = x;
++		py[i] = y;
++	}
++
++	IOLockLock(fLock);
++	for (uint32_t i = 0; i < NVT_MAX_FINGERS; i++) {
++		if (present[i]) {
++			if (!fDown[i] || fX[i] != px[i] || fY[i] != py[i]) {
++				fDown[i] = true;
++				fX[i] = px[i];
++				fY[i] = py[i];
++				reportSlot(i, true, px[i], py[i]);
++			}
++		} else if (fDown[i]) {
++			fDown[i] = false;
++			reportSlot(i, false, fX[i], fY[i]);
++		}
++	}
++	IOLockUnlock(fLock);
++	if (++fPackets == 1 || (fPackets % 2000) == 0) {
++		IOLog("SWEET NVT: %u packets, %u errors, %u checksum errors\n",
++		    fPackets, fErrors, fChecksumErrors);
++	}
++}
++
++#endif /* SWEET */
+diff --git a/iokit/Kernel/arm/SweetNovatekTouch.h b/iokit/Kernel/arm/SweetNovatekTouch.h
+new file mode 100644
+index 0000000..6082073
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h
+@@ -0,0 +1,53 @@
++/*
++ * NABU NT36523 touch provider (SPI, SE18).
++ *
++ * The controller already runs its factory firmware; A4.2 deliberately does
++ * not download a firmware image.  This provider reads the event buffer and
++ * feeds the existing SweetHIDTouch service through sweet_hid_touch().
++ */
++#ifndef _SWEET_NOVATEK_TOUCH_H
++#define _SWEET_NOVATEK_TOUCH_H
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOLocks.h>
++
++class IOWorkLoop;
++class IOTimerEventSource;
++class SweetGeniSPI;
++class SweetTLMM;
++
++class SweetNovatekTouch : public IOService {
++	OSDeclareDefaultStructors(SweetNovatekTouch);
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
++
++private:
++	static void pollFired(OSObject *owner, IOTimerEventSource *sender);
++	bool findProviders();
++	bool pageSet(uint32_t addr);
++	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
++	bool readFwInfo();
++	void poll();
++	void readPacket();
++	void reportSlot(uint32_t slot, bool down, uint32_t x, uint32_t y);
++
++	SweetGeniSPI *fSPI;
++	SweetTLMM *fTLMM;
++	IOWorkLoop *fWorkLoop;
++	IOTimerEventSource *fTimer;
++	IOLock *fLock;
++	uint32_t fMaxX;
++	uint32_t fMaxY;
++	uint32_t fFwVer;
++	uint32_t fPackets;
++	uint32_t fErrors;
++	uint32_t fChecksumErrors;
++	bool fDown[10];
++	uint32_t fX[10];
++	uint32_t fY[10];
++	bool fForcePoll;
++};
++
++#endif /* _SWEET_NOVATEK_TOUCH_H */
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+index 27bc49d..dcc47ee 100644
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -368,6 +368,7 @@ protected:
+ private:
+ 	IOLock *fLock;
+ 	int fLogicalW, fLogicalH, fOffX, fOffY;
++	int fPanelW, fPanelH;
+ 	bool fDown[SWEET_TOUCH_FINGERS];
+ 	bool fEdge[SWEET_TOUCH_FINGERS];
+ 	IOFixed fX[SWEET_TOUCH_FINGERS];
+@@ -434,17 +435,38 @@ SweetHIDTouch::start(IOService *provider)
+ 	}
+ 	int native = 0;
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+-	fLogicalW = native ? 1080 : 1125;
+-	fLogicalH = native ? 2400 : 2436;
+-	fOffX = (fLogicalW - 1080) / 2;
+-	fOffY = (fLogicalH - 2400) / 2;
++	PE_Video video;
++	PE_current_console(&video);
++	fPanelW = (int)video.v_width;
++	fPanelH = (int)video.v_height;
++	if (fPanelW <= 0 || fPanelH <= 0) {
++		fPanelW = 1080;
++		fPanelH = 2400;
++	}
++	fLogicalW = fPanelW;
++	fLogicalH = fPanelH;
++	/* SWEET presents the iPhone X 1125x2436 canvas centered on its
++	 * 1080x2400 panel.  NABU's 1600x2560 panel is already the native
++	 * presentation (SweetFramebuffer uses the boot framebuffer size). */
++	if (!native && fPanelW <= 1125 && fPanelH <= 2436) {
++		fLogicalW = 1125;
++		fLogicalH = 2436;
++	}
++	fOffX = (fLogicalW - fPanelW) / 2;
++	fOffY = (fLogicalH - fPanelH) / 2;
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+-	setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
+-	setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
++	if (fPanelW > 1125) {
++		setProperty("SurfaceWidth", (unsigned long long)(147 << 16), 32);
++		setProperty("SurfaceHeight", (unsigned long long)(235 << 16), 32);
++	} else {
++		setProperty("SurfaceWidth", (unsigned long long)(68 << 16), 32);	/* mm, 16.16 */
++		setProperty("SurfaceHeight", (unsigned long long)(151 << 16), 32);
++	}
+ 	gSweetTouch = this;
+ 	registerService();
+-	IOLog("SWEET HID: touch registered\n");
++	IOLog("SWEET HID: touch registered %dx%d (panel %dx%d)\n",
++	    fLogicalW, fLogicalH, fPanelW, fPanelH);
+ 	return true;
+ }
+ 
+@@ -458,12 +480,12 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 	if (finger < 0 || finger >= SWEET_TOUCH_FINGERS) {
+ 		return;
+ 	}
+-	x = x < 0 ? 0 : (x > 1079 ? 1079 : x);
+-	y = y < 0 ? 0 : (y > 2399 ? 2399 : y);
++	x = x < 0 ? 0 : (x >= fPanelW ? fPanelW - 1 : x);
++	y = y < 0 ? 0 : (y >= fPanelH ? fPanelH - 1 : y);
+ 
+ 	IOLockLock(fLock);
+ 	bool was = fDown[finger];
+-	/* Panel pixels -> the presented 1125x2436 display (SweetFramebuffer.cpp). */
++	/* Panel pixels -> the presented display (SweetFramebuffer.cpp). */
+ 	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+ 	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
+ 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
+@@ -472,8 +494,8 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+ 		return;
+ 	}
+ 	if (!was && down) {
+-		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+-		    y < SWEET_TOUCH_EDGE_PX || y > 2399 - SWEET_TOUCH_EDGE_PX;
++		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > fPanelW - 1 - SWEET_TOUCH_EDGE_PX ||
++		    y < SWEET_TOUCH_EDGE_PX || y > fPanelH - 1 - SWEET_TOUCH_EDGE_PX;
+ 	}
+ 
+ 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index b95471a..3b12b96 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -114,6 +114,11 @@ const char * gIOKernelConfigTables =
+     "     'IOProviderClass' = IOPlatformDevice;"
+     "     'IONameMatch'     = 'qcom,spi-geni';"
+     "   },"
++    "   {"
++    "     'IOClass'         = SweetNovatekTouch;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IONameMatch'     = 'novatek,NVT-ts-spi';"
++    "   },"
+ #endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index 0042794..7d17567 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -10,6 +10,7 @@ iokit/Kernel/arm/AppleARMSMP.cpp    					optional iokitcpp
+ iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
+ iokit/Kernel/arm/SweetPlatform.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetGeniSPI.cpp                                optional iokitcpp
++iokit/Kernel/arm/SweetNovatekTouch.cpp                           optional iokitcpp
+ 
+ iokit/Kernel/arm/SweetCPU.cpp                                    optional iokitcpp
+ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp

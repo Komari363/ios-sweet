@@ -251,6 +251,13 @@ def build(seed=None, qemu=False, highmem=False, nabu=False, product=None):
                 ('compatible', cstr('qcom,spi-geni')),
                 ('reg', u64(SPI18, SPI18_SIZE)),
             ]),
+            node('touch', [
+                ph(),
+                ('compatible', cstr('novatek,NVT-ts-spi')),
+                ('spi-max-frequency', u32(9600000)),
+                ('novatek,irq-gpio', u32(39, 0x2001)),
+                ('novatek,swrst-n8-addr', u32(0x03f0fe)),
+            ]),
             node('gcc', [
                 ph(),
                 ('compatible', cstr('qcom,gcc-sm8150')),

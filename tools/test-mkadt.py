@@ -82,6 +82,11 @@ def main():
     assert b'qcom,spi-geni' in compat(spi)
     assert struct.unpack('<2Q', spi.prop('reg')) == (0xc84000, 0x4000)
 
+    touch = child(parsed, 'touch')
+    assert b'novatek,NVT-ts-spi' in compat(touch)
+    assert prop_u32(touch, 'spi-max-frequency') == 9600000
+    assert struct.unpack('<2I', touch.prop('novatek,irq-gpio')) == (39, 0x2001)
+
     gcc = child(parsed, 'gcc')
     assert b'qcom,gcc-sm8150' in compat(gcc)
     assert struct.unpack('<2Q', gcc.prop('reg')) == (0x100000, 0x1f0000)
