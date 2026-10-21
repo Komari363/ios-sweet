@@ -1,0 +1,538 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+new file mode 100644
+index 0000000..8e22e59
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -0,0 +1,443 @@
++/*
++ * Polled GENI SPI provider for NABU (SE18 @ 0xc84000).
++ *
++ * FIFO only.  This is intentionally a synchronous, one-transfer-at-a-time
++ * provider: the touch packet is 81 bytes, so the FIFO path is sufficient and
++ * much easier to reason about than SE DMA/GSI during bring-up.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(SWEET)
++
++#include "SweetGeniSPI.h"
++#include "SweetPlatform.h"
++
++#include <IOKit/IOLib.h>
++#include <IOKit/IOMemoryDescriptor.h>
++#include <IOKit/IOWorkLoop.h>
++#include <IOKit/IOTimerEventSource.h>
++#include <IOKit/IOMapTypes.h>
++#include <pexpert/pexpert.h>
++
++#define SPI_SE_BASE             0x00c84000u
++
++#define GENI_SER_M_CLK_CFG      0x048u
++#define GENI_STATUS             0x040u
++#define GENI_IF_FIFO_DISABLE    0x064u
++#define GENI_FW_REVISION        0x068u
++#define GENI_CLK_SEL            0x07cu
++
++#define SPI_CPHA                0x224u
++#define SPI_LOOPBACK            0x22cu
++#define SPI_CPOL                0x230u
++#define SPI_DEMUX_OUTPUT_INV    0x24cu
++#define SPI_DEMUX_SEL           0x250u
++#define SPI_TRANS_CFG           0x25cu
++#define SPI_WORD_LEN            0x268u
++#define SPI_TX_TRANS_LEN        0x26cu
++#define SPI_RX_TRANS_LEN        0x270u
++#define SPI_DELAY_COUNTERS      0x278u
++
++#define GENI_DMA_MODE_EN        0x258u
++#define GENI_M_CMD0             0x600u
++#define GENI_M_CMD_CTRL         0x604u
++#define GENI_M_IRQ_STATUS       0x610u
++#define GENI_M_IRQ_EN           0x614u
++#define GENI_M_IRQ_CLEAR        0x618u
++#define GENI_TX_FIFO            0x700u
++#define GENI_RX_FIFO            0x780u
++#define GENI_TX_FIFO_STATUS     0x800u
++#define GENI_RX_FIFO_STATUS     0x804u
++#define GENI_TX_WATERMARK       0x80cu
++#define GENI_HW_PARAM_0         0xe24u
++
++#define SPI_FULL_DUPLEX         3u
++#define SPI_TX_ONLY             1u
++#define SPI_RX_ONLY             2u
++
++#define SPI_IRQ_DONE            (1u << 0)
++#define SPI_IRQ_ERRORS          ((1u << 1) | (1u << 2) | \
++                                 (1u << 24) | (1u << 25) | \
++                                 (1u << 28) | (1u << 29))
++#define SPI_CMD_CANCEL          (1u << 2)
++#define SPI_CMD_ABORT           (1u << 1)
++
++#define SPI_TIMEOUT_US          1500000u
++#define SPI_TIMEOUT_STEP_US     10u
++
++static inline uint32_t
++spi_read(volatile uint32_t *base, uint32_t off)
++{
++	uint32_t v = base[off / 4];
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static inline void
++spi_write(volatile uint32_t *base, uint32_t off, uint32_t value)
++{
++	base[off / 4] = value;
++	__asm__ volatile("dmb oshst" ::: "memory");
++}
++
++OSDefineMetaClassAndStructors(SweetGeniSPI, IOService);
++
++bool
++SweetGeniSPI::start(IOService *provider)
++{
++	fMap = NULL;
++	fBase = NULL;
++	fLock = NULL;
++	fWorkLoop = NULL;
++	fTestTimer = NULL;
++	fTLMMService = NULL;
++	fGCCService = NULL;
++	fFifoDepth = 0;
++	fFifoWidth = 0;
++	fTestRuns = 0;
++	fPlatformWarned = false;
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	fMap = provider->mapDeviceMemoryWithIndex(0);
++	if (fMap == NULL || fMap->getLength() < 0x4000) {
++		IOLog("SWEET SPI: no SE18 register window\n");
++		return false;
++	}
++	fBase = (volatile uint32_t *)fMap->getVirtualAddress();
++	fLock = IOLockAlloc();
++	fWorkLoop = IOWorkLoop::workLoop();
++	if (fLock == NULL || fWorkLoop == NULL) {
++		IOLog("SWEET SPI: lock/workloop allocation failed\n");
++		return false;
++	}
++	uint32_t hw = spi_read(fBase, GENI_HW_PARAM_0);
++	fFifoDepth = (hw >> 16) & 0x3f;
++	fFifoWidth = (hw >> 24) & 0x3f;
++	if (fFifoDepth == 0) {
++		fFifoDepth = 16;
++	}
++	if (fFifoWidth == 0) {
++		fFifoWidth = 32;
++	}
++	uint32_t proto = (spi_read(fBase, GENI_FW_REVISION) >> 8) & 0xff;
++	registerService();
++	IOLog("SWEET SPI: SE18 ready proto=%u fifo=%u x %u bits, irq=%u\n",
++	    proto, fFifoDepth, fFifoWidth,
++	    spi_read(fBase, GENI_M_IRQ_STATUS));
++	int selftest = 0;
++	if (PE_parse_boot_argn("sweetspitest", &selftest, sizeof(selftest)) &&
++	    selftest) {
++		fTestTimer = IOTimerEventSource::timerEventSource(this,
++		    &SweetGeniSPI::testFired);
++		if (fTestTimer != NULL &&
++		    fWorkLoop->addEventSource(fTestTimer) == kIOReturnSuccess) {
++			fTestTimer->setTimeoutMS(5000);
++		} else {
++			IOLog("SWEET SPI: cannot arm self-test timer\n");
++		}
++	}
++	return true;
++}
++
++void
++SweetGeniSPI::stop(IOService *provider)
++{
++	if (fTestTimer != NULL) {
++		fTestTimer->cancelTimeout();
++		if (fWorkLoop != NULL) {
++			fWorkLoop->removeEventSource(fTestTimer);
++		}
++		fTestTimer->release();
++		fTestTimer = NULL;
++	}
++	OSSafeReleaseNULL(fTLMMService);
++	OSSafeReleaseNULL(fGCCService);
++	if (fWorkLoop != NULL) {
++		fWorkLoop->release();
++		fWorkLoop = NULL;
++	}
++	if (fLock != NULL) {
++		IOLockFree(fLock);
++		fLock = NULL;
++	}
++	if (fMap != NULL) {
++		fMap->release();
++		fMap = NULL;
++	}
++	fBase = NULL;
++	IOService::stop(provider);
++}
++
++uint32_t
++SweetGeniSPI::readReg(uint32_t off) const
++{
++	if (fBase == NULL || off >= 0x4000 || (off & 3u)) {
++		return 0;
++	}
++	return spi_read(fBase, off);
++}
++
++void
++SweetGeniSPI::writeReg(uint32_t off, uint32_t value)
++{
++	if (fBase != NULL && off < 0x4000 && !(off & 3u)) {
++		spi_write(fBase, off, value);
++	}
++}
++
++bool
++SweetGeniSPI::lookupPlatform()
++{
++	if (fTLMMService == NULL) {
++		OSPtr<OSDictionary> match = IOService::serviceMatching("SweetTLMM");
++		if (match != NULL) {
++			fTLMMService = IOService::copyMatchingService(match);
++		}
++	}
++	if (fGCCService == NULL) {
++		OSPtr<OSDictionary> match = IOService::serviceMatching("SweetGCC");
++		if (match != NULL) {
++			fGCCService = IOService::copyMatchingService(match);
++		}
++	}
++	if (fTLMMService == NULL || fGCCService == NULL) {
++		if (!fPlatformWarned) {
++			IOLog("SWEET SPI: waiting for SweetTLMM/SweetGCC\n");
++			fPlatformWarned = true;
++		}
++		return false;
++	}
++	return true;
++}
++
++bool
++SweetGeniSPI::configurePins(bool active)
++{
++	if (!lookupPlatform()) {
++		return false;
++	}
++	SweetTLMM *tlmm = OSDynamicCast(SweetTLMM, fTLMMService);
++	if (tlmm == NULL) {
++		return false;
++	}
++	if (active) {
++		/* GPIO23/24/25 = CLK/MOSI/MISO, GPIO26 = CS0; the mux indices
++		 * are the per-pin qup18 entries in the SM8150 pinctrl table. */
++		tlmm->setMux(23, 2);
++		tlmm->setPad(23, 0, 3, true);
++		tlmm->setMux(24, 3);
++		tlmm->setPad(24, 0, 3, true);
++		tlmm->setMux(25, 3);
++		tlmm->setPad(25, 0, 3, false);
++		tlmm->setMux(26, 2);
++		tlmm->setPad(26, 0, 3, true);
++	} else {
++		tlmm->setMux(26, 0);
++		tlmm->setPad(26, 1, 3, true);
++		tlmm->gpioWrite(26, false);
++		tlmm->setMux(23, 0);
++		tlmm->setPad(23, 0, 3, false);
++		tlmm->setMux(24, 0);
++		tlmm->setPad(24, 0, 3, false);
++		tlmm->setMux(25, 0);
++		tlmm->setPad(25, 0, 3, false);
++	}
++	return true;
++}
++
++bool
++SweetGeniSPI::configureClock()
++{
++	if (!lookupPlatform()) {
++		return false;
++	}
++	SweetGCC *gcc = OSDynamicCast(SweetGCC, fGCCService);
++	if (gcc == NULL) {
++		return false;
++	}
++	IOReturn ret = gcc->enableSE(18);
++	if (ret != kIOReturnSuccess) {
++		IOLog("SWEET SPI: SE18 clock enable failed 0x%x\n", ret);
++		return false;
++	}
++	/* 19.2 MHz parent / (2 * 9.6 MHz) = divider 1.  The GENI divider
++	 * field is written with the divider value, not value-1. */
++	writeReg(GENI_CLK_SEL, 0);
++	writeReg(GENI_SER_M_CLK_CFG, (1u << 0) | (1u << 4));
++	return true;
++}
++
++void
++SweetGeniSPI::cancelCommand()
++{
++	writeReg(GENI_M_CMD_CTRL, SPI_CMD_CANCEL);
++	for (uint32_t i = 0; i < 100; i++) {
++		if (!(readReg(GENI_STATUS) & 1u)) {
++			break;
++		}
++		IODelay(10);
++	}
++	writeReg(GENI_M_CMD_CTRL, SPI_CMD_ABORT);
++	for (uint32_t i = 0; i < 100; i++) {
++		if (!(readReg(GENI_STATUS) & 1u)) {
++			break;
++		}
++		IODelay(10);
++	}
++	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
++	writeReg(GENI_M_CMD_CTRL, 0);
++}
++
++IOReturn
++SweetGeniSPI::spiTransfer(const void *tx, void *rx, UInt32 len, UInt32 hz,
++    UInt8 cs, UInt8 mode, UInt8 bpw)
++{
++	if (fBase == NULL || fLock == NULL) {
++		return kIOReturnNotReady;
++	}
++	IOLockLock(fLock);
++	IOReturn ret = transferLocked(tx, rx, len, hz, cs, mode, bpw);
++	IOLockUnlock(fLock);
++	return ret;
++}
++
++IOReturn
++SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
++    UInt8 cs, UInt8 mode, UInt8 bpw)
++{
++	if (len == 0 || len > (63u << 10) || cs > 3 || bpw != 8 || mode != 0) {
++		return kIOReturnUnsupported;
++	}
++	if (tx == NULL && rx == NULL) {
++		return kIOReturnBadArgument;
++	}
++	if (!configurePins(true) || !configureClock()) {
++		return kIOReturnNotReady;
++	}
++	IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
++	    len, cs, hz, fFifoDepth, fFifoWidth);
++	writeReg(GENI_M_IRQ_EN, 0);
++	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
++	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
++	writeReg(SPI_CPHA, 0);
++	writeReg(SPI_LOOPBACK, 0);
++	writeReg(SPI_CPOL, 0);
++	writeReg(SPI_DEMUX_OUTPUT_INV, 0);
++	writeReg(SPI_DEMUX_SEL, cs & 0xf);
++	writeReg(SPI_TRANS_CFG, 0);
++	writeReg(SPI_WORD_LEN, (bpw - 4u) & 0x3ffu);
++	writeReg(SPI_DELAY_COUNTERS, 0);
++
++	uint32_t words = (len * 8u) / bpw;
++	writeReg(SPI_TX_TRANS_LEN, tx != NULL ? words : 0);
++	writeReg(SPI_RX_TRANS_LEN, rx != NULL ? words : 0);
++	writeReg(GENI_TX_WATERMARK, 1);
++
++	uint32_t opcode = (tx != NULL && rx != NULL) ? SPI_FULL_DUPLEX :
++	    (tx != NULL ? SPI_TX_ONLY : SPI_RX_ONLY);
++	writeReg(GENI_M_CMD0, opcode << 27);
++
++	const uint8_t *txb = (const uint8_t *)tx;
++	uint32_t tx_off = 0;
++	if (txb != NULL) {
++		uint32_t spins = 0;
++		while (tx_off < len) {
++			uint32_t used = readReg(GENI_TX_FIFO_STATUS) & 0x0fffffffu;
++			uint32_t free_words = used < fFifoDepth ?
++			    fFifoDepth - used : 0;
++			if (free_words == 0) {
++				if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++					cancelCommand();
++					return kIOReturnTimeout;
++				}
++				IODelay(SPI_TIMEOUT_STEP_US);
++				continue;
++			}
++			spins = 0;
++			for (uint32_t w = 0; w < free_words && tx_off < len; w++) {
++				uint32_t word = 0;
++				for (uint32_t b = 0; b < 4 && tx_off < len; b++) {
++					word |= (uint32_t)txb[tx_off++] << (8 * b);
++				}
++				writeReg(GENI_TX_FIFO, word);
++			}
++		}
++		writeReg(GENI_TX_WATERMARK, 0);
++	}
++
++	uint8_t *rxb = (uint8_t *)rx;
++	uint32_t rx_off = 0;
++	uint32_t spins = 0;
++	while (rxb != NULL && rx_off < len) {
++		uint32_t status = readReg(GENI_RX_FIFO_STATUS);
++		uint32_t wc = status & 0x01ffffffu;
++		if (wc == 0) {
++			uint32_t irq = readReg(GENI_M_IRQ_STATUS);
++			if (irq & SPI_IRQ_ERRORS) {
++				writeReg(GENI_M_IRQ_CLEAR, irq);
++				cancelCommand();
++				return kIOReturnIOError;
++			}
++			if (irq & SPI_IRQ_DONE) {
++				break;
++			}
++			if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++				cancelCommand();
++				return kIOReturnTimeout;
++			}
++			IODelay(SPI_TIMEOUT_STEP_US);
++			continue;
++		}
++		spins = 0;
++		for (uint32_t w = 0; w < wc && rx_off < len; w++) {
++			uint32_t word = readReg(GENI_RX_FIFO);
++			for (uint32_t b = 0; b < 4 && rx_off < len; b++) {
++				rxb[rx_off++] = (uint8_t)(word >> (8 * b));
++			}
++		}
++	}
++
++	uint32_t irq = 0;
++	spins = 0;
++	for (;;) {
++		irq = readReg(GENI_M_IRQ_STATUS);
++		if (irq & SPI_IRQ_ERRORS) {
++			writeReg(GENI_M_IRQ_CLEAR, irq);
++			cancelCommand();
++			return kIOReturnIOError;
++		}
++		if (irq & SPI_IRQ_DONE) {
++			break;
++		}
++		if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++			cancelCommand();
++			return kIOReturnTimeout;
++		}
++		IODelay(SPI_TIMEOUT_STEP_US);
++	}
++	writeReg(GENI_M_IRQ_CLEAR, irq);
++	writeReg(GENI_TX_WATERMARK, 0);
++	return kIOReturnSuccess;
++}
++
++void
++SweetGeniSPI::testFired(OSObject *owner, IOTimerEventSource *sender)
++{
++	__unused IOTimerEventSource *s = sender;
++	SweetGeniSPI *spi = (SweetGeniSPI *)owner;
++	if (spi == NULL || spi->fBase == NULL) {
++		return;
++	}
++	/* Page-set frame for 0x3F004: 0xff, page[22:15], page[14:7]. */
++	uint8_t tx[4] = { 0xff, 0x07, 0x60, 0x00 };
++	uint8_t rx[4] = { 0 };
++	IOReturn ret = spi->spiTransfer(tx, rx, sizeof(tx), 9600000, 0, 0, 8);
++	IOLog("SWEET SPI: selftest %u ret=0x%x rx=%02x %02x %02x %02x\n",
++	    ++spi->fTestRuns, ret, rx[0], rx[1], rx[2], rx[3]);
++	if (spi->fTestRuns < 3) {
++		spi->fTestTimer->setTimeoutMS(3000);
++	}
++}
++
++#endif /* SWEET */
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
+new file mode 100644
+index 0000000..6a7cc20
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetGeniSPI.h
+@@ -0,0 +1,55 @@
++/*
++ * Polled GENI SPI provider for the NABU touch panel (SE18, 0xc84000).
++ *
++ * The A4.2 increment supports the FIFO path only: the touch controller's
++ * packet reads are 81 bytes at 9.6 MHz, far below the FIFO trigger size on
++ * this SE.  SE DMA/GSI are deliberately left for later.
++ */
++#ifndef _SWEET_GENI_SPI_H
++#define _SWEET_GENI_SPI_H
++
++#include <IOKit/IOService.h>
++#include <IOKit/IOLocks.h>
++
++class IOMemoryMap;
++class IOWorkLoop;
++class IOTimerEventSource;
++
++class SweetGeniSPI : public IOService {
++	OSDeclareDefaultStructors(SweetGeniSPI);
++
++public:
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
++
++	/* Full-duplex, mode 0, 8 bits per word.  tx/rx are optional only for
++	 * the matching one-direction opcode; the touch path supplies both. */
++	IOReturn spiTransfer(const void *tx, void *rx, UInt32 len, UInt32 hz,
++	    UInt8 cs, UInt8 mode, UInt8 bpw);
++
++	uint32_t readReg(uint32_t off) const;
++	void writeReg(uint32_t off, uint32_t value);
++
++private:
++	static void testFired(OSObject *owner, IOTimerEventSource *sender);
++	bool lookupPlatform();
++	bool configureClock();
++	bool configurePins(bool active);
++	void cancelCommand();
++	IOReturn transferLocked(const void *tx, void *rx, UInt32 len,
++	    UInt32 hz, UInt8 cs, UInt8 mode, UInt8 bpw);
++
++	IOMemoryMap *fMap;
++	volatile uint32_t *fBase;
++	IOLock *fLock;
++	IOWorkLoop *fWorkLoop;
++	IOTimerEventSource *fTestTimer;
++	IOService *fTLMMService;
++	IOService *fGCCService;
++	uint32_t fFifoDepth;
++	uint32_t fFifoWidth;
++	uint32_t fTestRuns;
++	bool fPlatformWarned;
++};
++
++#endif /* _SWEET_GENI_SPI_H */
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index e2aa036..b95471a 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -109,6 +109,11 @@ const char * gIOKernelConfigTables =
+     "     'IOProviderClass' = IOPlatformDevice;"
+     "     'IONameMatch'     = 'qcom,cmd-db';"
+     "   },"
++    "   {"
++    "     'IOClass'         = SweetGeniSPI;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IONameMatch'     = 'qcom,spi-geni';"
++    "   },"
+ #endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+index ca5ccc3..0042794 100644
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -9,6 +9,7 @@ iokit/Kernel/arm/AppleARMSMP.cpp    					optional iokitcpp
+ # SWEET device-tree platform (empty translation unit on other boards)
+ iokit/Kernel/arm/SweetPlatformExpert.cpp                         optional iokitcpp
+ iokit/Kernel/arm/SweetPlatform.cpp                               optional iokitcpp
++iokit/Kernel/arm/SweetGeniSPI.cpp                                optional iokitcpp
+ 
+ iokit/Kernel/arm/SweetCPU.cpp                                    optional iokitcpp
+ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp
