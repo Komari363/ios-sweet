@@ -1,17 +1,28 @@
 #!/bin/bash
-# Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.
+# Build the shim and wrap it in an Android boot image.
+#
+# BOARD=nabu         1600x2560 console/boot_args
+# HEADER_VERSION=3   NABU stock layout; no boot.img DTB (ABL supplies live FDT)
+# DTB=...            v2 only; header v2 requires a non-empty DTB
+# MKBOOTIMG=...      mkbootimg command, or a vendored mkbootimg.py
 set -euo pipefail
 cd "$(dirname "$0")"
 CC=aarch64-linux-gnu-gcc
 OBJCOPY=aarch64-linux-gnu-objcopy
 CFLAGS="-O2 -ffreestanding -nostdlib -fno-pic -mgeneral-regs-only -mstrict-align -fno-stack-protector -Wall -Wextra"
 # BOARD=nabu: 1600x2560 panel; the shim's early console and boot_args must use
-# the real stride or the kernel console is skewed.  DTB selects the live FDT
-# blob packed into the boot image (ABL still passes its own runtime FDT).
+# the real stride or the kernel console is skewed.
 if [ "${BOARD:-}" = nabu ]; then
 	CFLAGS="$CFLAGS -DFB_W=1600 -DFB_H=2560 -DFB_STRIDE=6400"
 fi
+HEADER_VERSION=${HEADER_VERSION:-2}
 DTB=${DTB:-../dtb/boot_unpacked/dtb}
+MKBOOTIMG=${MKBOOTIMG:-mkbootimg}
+if [[ "$MKBOOTIMG" == *.py ]]; then
+	MKBOOTIMG_CMD=(python3 "$MKBOOTIMG")
+else
+	MKBOOTIMG_CMD=("$MKBOOTIMG")
+fi
 mkdir -p out
 for f in start.S shim.c console.c mmu.c fdt.c loader.c ufs.c; do
 	$CC $CFLAGS -c $f -o out/${f%.*}.o
@@ -33,11 +44,17 @@ if [ -n "${1:-}" ]; then
 else
 	(cd out && rm -rf rd && mkdir rd && cd rd && find . | cpio -o -H newc --quiet | gzip -9 > ../ramdisk.bin)
 fi
-mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
-	--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
-	--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
-	--os_version 17.0.0 --os_patch_level 2035-06 \
-	--cmdline "console=null" -o out/shim-boot.img
+if [ "$HEADER_VERSION" = 3 ]; then
+	"${MKBOOTIMG_CMD[@]}" --header_version 3 --kernel out/Image --ramdisk out/ramdisk.bin \
+		--os_version 17.0.0 --os_patch_level 2035-06 \
+		--cmdline "console=null" -o out/shim-boot.img
+else
+	"${MKBOOTIMG_CMD[@]}" --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \
+		--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \
+		--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \
+		--os_version 17.0.0 --os_patch_level 2035-06 \
+		--cmdline "console=null" -o out/shim-boot.img
+fi
 # Host render of the console layout.
 gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test
 ls -l out/Image out/shim-boot.img

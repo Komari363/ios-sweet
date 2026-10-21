@@ -21,10 +21,29 @@
   `39648771868` compiled `SweetNovatekTouch.cpo`/`SweetGeniSPI.cpo` and linked
   kernel sha256 `cf13c50b...` (17,258,016 B).  CI run `39648137158` failed on
   `OSPtr::get()` and was superseded after the fix.
-- Next increment: register GIC SPI 583 (or keep polling if the controller
-  needs it), then build the full `mkpayload` + `shim BOARD=nabu` image and do
-  the UFS/display first-light boot.  Device tests have not started; A4.2 is
-  not complete until the payload boots.
+- **A4.2 decision (2026-10-22): do not wire GIC SPI 583 for first light.**
+  SE18 stays FIFO-polled; touch stays GPIO39-polled.  `sweetnovatek_poll=1`
+  is only a debug switch (ignore GPIO39), not the final design.  GPIO39
+  interrupt is the next useful interrupt, after first light.
+- `tools/build-nabu-firstlight.sh` orchestrates `mkadt --nabu` ->
+  `mkpayload` -> `shim BOARD=nabu HEADER_VERSION=3`; it verifies that the
+  unpacked ramdisk equals the payload and that `SWEETXNU` is present.
+  NABU uses boot header **v3** (stock NABU layout, no boot.img DTB; ABL
+  supplies the live FDT).  The v2 path is preserved for SWEET.
+- First-light artifacts (host-built, not booted):
+  `output/a4.2/first-light/shim-boot.img` 16,855,040 B, sha256
+  `cf3a843f...`; payload 16,666,688 B, sha256 `1eb8978c...`; ADT 13,860 B,
+  sha256 `dbb623af...`; shim Image 180,224 B, sha256 `95884bf7...`.
+  Kernel is CI run `39648771868` (sha256 `cf13c50b...`).
+- **TWRP HFS+ preflight (host-side):** `tools/twrp-hfs-preflight.sh` unpacked
+  `img/recovery/V4-MODDED-TWRP-LINUX-03-05.img`.  The kernel has **no HFS+
+  strings / CONFIG_HFSPLUS_FS**, and the ramdisk only carries `blkid`/probe
+  strings.  Expect `iosroot` not to mount in this TWRP; the A5 HFS+/log-ring
+  gate is at risk and needs a device confirmation or a recovery with hfsplus.
+- Next: boot the first-light image only after A5 has flashed `iosroot`;
+  first round uses GPIO39 polling, and if there is no packet boot once with
+  `sweetnovatek_poll=1` to separate SPI from the INT line.  A4.2 host build
+  is complete; device validation is A5.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
