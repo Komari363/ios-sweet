@@ -1,5 +1,20 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## NABU / A4.2 handoff (2026-10-22)
+
+- The nabu workspace now carries a separate `--nabu` ADT profile in `tools/mkadt.py`:
+  SM8150 GIC/UFS, 1 GiB upper-bank slice at `0xc0000000`, 1600x2560 panel,
+  and platform nodes for TLMM/GCC/cmd-db/apps_rsc/SE18.
+- `tools/test-mkadt.py` asserts the profile (13,588-byte ADT, all P0 nodes).
+- `shim/build.sh BOARD=nabu` compiles the early console/`boot_args` with
+  `FB_W=1600 FB_H=2560 FB_STRIDE=6400`; `DTB=` overrides the packed FDT.
+- `xnu/patches/0082-sweet-nabu-platform.patch` adds `SweetTLMM`, `SweetGCC`,
+  `SweetCmdDb`; it is a no-op outside `SWEET` builds.
+- First increment commit `21aeee2`; CI run `39643216503` (see run page,
+  result recorded in the root `STATE.md` when complete).
+- Next increment: `SweetGeniSPI` + `SweetNovatekTouch`, then UFS/display
+  first-light payload.  A4.2 is not complete until the payload boots.
+
 ## Agent handoff / active work (2026-10-15, latest)
 
 ### >>> UPDATE 2026-10-18 (read first, then the 10-17 handoff below) <<<

@@ -1,9 +1,9 @@
 diff --git a/iokit/Kernel/arm/SweetPlatform.cpp b/iokit/Kernel/arm/SweetPlatform.cpp
 new file mode 100644
-index 0000000..8c4d68f
+index 0000000..907f547
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetPlatform.cpp
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,414 @@
 +/*
 + * SM8150 platform providers for NABU A4.2.
 + *
@@ -40,7 +40,7 @@ index 0000000..8c4d68f
 +#define SWEET_CMDD_BASE          0x00000008u
 +#define SWEET_CMDD_RSC_SIZE      16u
 +#define SWEET_CMDD_RSC_COUNT     8u
-+#define SWEET_CMDD_HEADER        0x8cu
++#define SWEET_CMDD_HEADER        0x90u
 +#define SWEET_CMDD_ENTRY_SIZE    24u
 +#define SWEET_CMDD_MAGIC         0x0c0330dbu
 +
@@ -74,7 +74,7 @@ index 0000000..8c4d68f
 +bool
 +SweetTLMM::init()
 +{
-+	if (!IOService::init()) {
++	if (!OSObject::init()) {
 +		return false;
 +	}
 +	fMap = NULL;
@@ -197,7 +197,7 @@ index 0000000..8c4d68f
 +bool
 +SweetGCC::init()
 +{
-+	if (!IOService::init()) {
++	if (!OSObject::init()) {
 +		return false;
 +	}
 +	fMap = NULL;
@@ -300,7 +300,7 @@ index 0000000..8c4d68f
 +bool
 +SweetCmdDb::init()
 +{
-+	if (!IOService::init()) {
++	if (!OSObject::init()) {
 +		return false;
 +	}
 +	fWindow = NULL;
@@ -392,6 +392,9 @@ index 0000000..8c4d68f
 +		uint16_t hdr = sweet_read16(rh + 2);
 +		uint16_t cnt = sweet_read16(rh + 6);
 +		uint32_t off = SWEET_CMDD_HEADER + hdr;
++		if (off > fDbSize) {
++			break;
++		}
 +		for (uint32_t j = 0; j < cnt; j++) {
 +			uint32_t eoff = off + j * SWEET_CMDD_ENTRY_SIZE;
 +			if (eoff + SWEET_CMDD_ENTRY_SIZE > fDbSize) {

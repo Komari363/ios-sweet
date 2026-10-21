@@ -186,6 +186,8 @@ Not in git: partition backups, live device trees, recovery images, Apple firmwar
 | 0066–0067 | Fault-region crash info; console mute |
 | 0068 | IOSurface lookup semantics for already-mapped surfaces |
 | 0069 | Batched persistent-log flushes |
+| 0070–0081 | PID hibernate, touch edge events, USB probing/ECM/link state, SMP 8 cores, display power |
+| 0082 | NABU/SM8150 A4.2 platform providers (`SweetTLMM`, `SweetGCC`, `SweetCmdDb`) |
 
 ## Key hardware facts
 
