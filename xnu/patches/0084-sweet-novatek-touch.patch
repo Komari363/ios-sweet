@@ -1,16 +1,55 @@
 diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
-index 8e22e59..44eceff 100644
+index 8e22e59..6682216 100644
 --- a/iokit/Kernel/arm/SweetGeniSPI.cpp
 +++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
-@@ -95,6 +95,7 @@ SweetGeniSPI::start(IOService *provider)
+@@ -95,7 +95,10 @@ SweetGeniSPI::start(IOService *provider)
  	fFifoDepth = 0;
  	fFifoWidth = 0;
  	fTestRuns = 0;
 +	fXferCount = 0;
  	fPlatformWarned = false;
++	fPinsReady = false;
++	fClockReady = false;
  	if (!IOService::start(provider)) {
  		return false;
-@@ -315,8 +316,10 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	}
+@@ -221,6 +224,9 @@ SweetGeniSPI::configurePins(bool active)
+ 	if (tlmm == NULL) {
+ 		return false;
+ 	}
++	if (active && fPinsReady) {
++		return true;
++	}
+ 	if (active) {
+ 		/* GPIO23/24/25 = CLK/MOSI/MISO, GPIO26 = CS0; the mux indices
+ 		 * are the per-pin qup18 entries in the SM8150 pinctrl table. */
+@@ -243,6 +249,7 @@ SweetGeniSPI::configurePins(bool active)
+ 		tlmm->setMux(25, 0);
+ 		tlmm->setPad(25, 0, 3, false);
+ 	}
++	fPinsReady = active;
+ 	return true;
+ }
+ 
+@@ -252,6 +259,9 @@ SweetGeniSPI::configureClock()
+ 	if (!lookupPlatform()) {
+ 		return false;
+ 	}
++	if (fClockReady) {
++		return true;
++	}
+ 	SweetGCC *gcc = OSDynamicCast(SweetGCC, fGCCService);
+ 	if (gcc == NULL) {
+ 		return false;
+@@ -265,6 +275,7 @@ SweetGeniSPI::configureClock()
+ 	 * field is written with the divider value, not value-1. */
+ 	writeReg(GENI_CLK_SEL, 0);
+ 	writeReg(GENI_SER_M_CLK_CFG, (1u << 0) | (1u << 4));
++	fClockReady = true;
+ 	return true;
+ }
+ 
+@@ -315,8 +326,10 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
  	if (!configurePins(true) || !configureClock()) {
  		return kIOReturnNotReady;
  	}
@@ -24,20 +63,23 @@ index 8e22e59..44eceff 100644
  	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
  	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
 diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
-index 6a7cc20..1681a27 100644
+index 6a7cc20..8961c15 100644
 --- a/iokit/Kernel/arm/SweetGeniSPI.h
 +++ b/iokit/Kernel/arm/SweetGeniSPI.h
-@@ -49,6 +49,7 @@ private:
+@@ -49,7 +49,10 @@ private:
  	uint32_t fFifoDepth;
  	uint32_t fFifoWidth;
  	uint32_t fTestRuns;
 +	uint32_t fXferCount;
  	bool fPlatformWarned;
++	bool fPinsReady;
++	bool fClockReady;
  };
  
+ #endif /* _SWEET_GENI_SPI_H */
 diff --git a/iokit/Kernel/arm/SweetNovatekTouch.cpp b/iokit/Kernel/arm/SweetNovatekTouch.cpp
 new file mode 100644
-index 0000000..bc7c907
+index 0000000..0924796
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
 @@ -0,0 +1,304 @@
@@ -183,12 +225,12 @@ index 0000000..bc7c907
 +	if (spiMatch == NULL || tlmmMatch == NULL) {
 +		return false;
 +	}
-+	OSPtr<IOService> spi = IOService::waitForMatchingService(spiMatch.get(),
++	OSPtr<IOService> spi = IOService::waitForMatchingService(spiMatch,
 +	    5ULL * 1000000000ULL);
-+	OSPtr<IOService> tlmm = IOService::waitForMatchingService(tlmmMatch.get(),
++	OSPtr<IOService> tlmm = IOService::waitForMatchingService(tlmmMatch,
 +	    5ULL * 1000000000ULL);
-+	fSPI = OSDynamicCast(SweetGeniSPI, spi.get());
-+	fTLMM = OSDynamicCast(SweetTLMM, tlmm.get());
++	fSPI = OSDynamicCast(SweetGeniSPI, spi);
++	fTLMM = OSDynamicCast(SweetTLMM, tlmm);
 +	if (fSPI == NULL || fTLMM == NULL) {
 +		return false;
 +	}
