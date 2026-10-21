@@ -2,9 +2,12 @@
 """Build the minimal Apple Device Tree that the SWEET xnu needs to boot.
 
 Only what the early boot path actually reads (see NOTES.md); every MMIO
-address comes from the sweet live FDT. Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem]
+address comes from the live FDT.  The SWEET (SM7150) and NABU (SM8150)
+profiles share the D22AP userland identity; the board constants differ.
+
+Usage:  mkadt.py OUT.adt [--dump] [--qemu] [--highmem] [--nabu] [--product ADT]
 """
-import hashlib, os, struct, sys
+import argparse, hashlib, os, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -33,6 +36,22 @@ VTIMER_INTID = 19
 QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE = 0x08000000, 0x080a0000, 62500000
 QEMU_VTIMER_INTID = 27
 
+# NABU (SM8150 / Xiaomi Pad 5).  A4.2 first boot uses a 1 GiB slice of the
+# upper bank, above the fixed low-bank carve-outs; the plan's full upper bank
+# is 0xc0000000 + 0x140000000.  GIC and UFS are at the same addresses as SWEET.
+NABU_PHYS_BASE = 0xc0000000
+NABU_MEM_SIZE = 0x40000000
+NABU_FB_W, NABU_FB_H, NABU_FB_STRIDE = 1600, 2560, 1600 * 4
+NABU_FB_SIZE = 0x02400000
+NABU_CPU_COMPAT = 'qcom,kryo485'
+# Platform providers needed by the A4.2 SPI/touch/UFS work:
+TLMM, TLMM_SIZE = 0x03000000, 0x0dc2000
+GCC, GCC_SIZE = 0x00100000, 0x1f0000
+CMD_DB, CMD_DB_SIZE = 0x0c3f000c, 8
+APPS_RSC, APPS_RSC_SIZE = 0x18220000, 0x100
+APPS_RSC_TCS, APPS_RSC_TCS_SIZE = 0x18220d00, 0x3000
+SPI18, SPI18_SIZE = 0x00c84000, 0x4000
+
 BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 
 # The iOS userland is the iPhone X (iPhone10,3 / D22AP) IPSW. MobileGestalt
@@ -42,11 +61,18 @@ BOOT_MANIFEST_HASH = hashlib.sha384(b'sweet boot manifest').digest()
 #   tools/remotezip.py URL DeviceTree.d22ap.im4p DIR
 #   ipsw img4 im4p extract DIR/Firmware/all_flash/DeviceTree.d22ap.im4p -o d22ap.adt
 D22AP_ADT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../research/ipsw-x/d22ap.adt')
+# The local nabu workspace keeps the extracted product tree here; a fresh
+# clone has neither file and mkadt only warns (the /product node is optional
+# for QEMU, required on hardware for MobileGestalt).
+D22AP_ADT_FALLBACK = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  '../../../output/a1/d22ap.adt')
 
 
-def d22ap_product(path=D22AP_ADT):
+def d22ap_product(path=None):
     """/product properties of the real D22AP tree, without the syscfg
     placeholders iBoot would fill in (flag bit set) and the node bookkeeping."""
+    if path is None:
+        path = D22AP_ADT if os.path.exists(D22AP_ADT) else D22AP_ADT_FALLBACK
     if not os.path.exists(path):
         print(f'warning: {path} missing, no /product node', file=sys.stderr)
         return None
@@ -68,9 +94,28 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False):
-    """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+def build(seed=None, qemu=False, highmem=False, nabu=False, product=None):
+    """qemu=True: QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py).
+    nabu=True: SM8150 board constants, 1 GiB upper-bank slice, 1600x2560 panel.
+    highmem applies to SWEET only; NABU is low-bank-safe by construction."""
+    if qemu and nabu:
+        raise SystemExit('--qemu and --nabu are mutually exclusive')
+    if nabu:
+        phys_base, mem_size = NABU_PHYS_BASE, NABU_MEM_SIZE
+        fb_w, fb_h, fb_stride, fb_size = NABU_FB_W, NABU_FB_H, NABU_FB_STRIDE, NABU_FB_SIZE
+        canvas_w, canvas_h = NABU_FB_W, NABU_FB_H
+        cpu_compat = NABU_CPU_COMPAT
+        root_compat = 'xiaomi,nabu'
+        soc_compat = 'qcom,sm8150'
+        cpu_clocks = (2841600, 2419200, 1785600)  # prime, gold, silver (kHz)
+    else:
+        phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
+        fb_w, fb_h, fb_stride, fb_size = FB_W, FB_H, FB_STRIDE, FB_SIZE
+        canvas_w, canvas_h = 1125, 2436
+        cpu_compat = 'qcom,kryo470'
+        root_compat = 'xiaomi,sweet'
+        soc_compat = 'qcom,sm7150'
+        cpu_clocks = (2304000, 2304000, 1804800)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
     phandle = iter(range(1, 1000))
@@ -119,16 +164,20 @@ def build(seed=None, qemu=False, highmem=False):
         # with CSR_ALLOW_UNRESTRICTED_FS (vm_unix.c shared region checks).
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
-    # SWEET SMP: all eight cores in physical-core order (0-5 Cortex-A55,
-    # 6-7 Cortex-A76), one homogeneous cluster. The kernel defaults to one
-    # and uses cpus=N to select an initial prefix (N <= 8).
-    # QEMU retains its original single-CPU tree: its MPIDRs differ from sweet.
+    # One homogeneous SMP cluster in physical-core order.  SWEET: six A55
+    # (0-5) then two A76 (6-7).  NABU/SM8150 Kryo 485: one prime (0), three
+    # gold (1-3), four silver (4-7).  A4.2 boots with cpus=1, so only cpu0's
+    # frequency is consumed; the rest is descriptive.  QEMU keeps one CPU.
     cpu_nodes = []
     for core in range(1 if qemu else 8):
+        if nabu:
+            clock = cpu_clocks[0] if core == 0 else (cpu_clocks[1] if core <= 3 else cpu_clocks[2])
+        else:
+            clock = cpu_clocks[0] if core >= 6 else cpu_clocks[2]
         cpu_nodes.append(node(f'cpu{core}', [
             ph(),
             ('device_type', cstr('cpu')),
-            ('compatible', cstr('qcom,kryo470') + cstr('ARM,v8')),
+            ('compatible', cstr(cpu_compat) + cstr('ARM,v8')),
             ('reg', u32(core << 8)),  # actual MPIDR Aff1:Aff0, NOT logical ID
             ('cpu-id', u32(core)),   # descriptive: XNU assigns IDs by DT order
             ('cluster-id', u32(0)),  # descriptive; see ml_parse_cpu_topology
@@ -139,7 +188,7 @@ def build(seed=None, qemu=False, highmem=False):
             ('l3-cache-id', u32(0)),     # shared L3
             ('state', cstr('running' if core == 0 else 'stopped')),
             ('timebase-frequency', u32(timebase)),
-            ('clock-frequency', u32(2304000000 if core >= 6 else 1804800000)),
+            ('clock-frequency', u32(clock * 1000)),
             ('bus-frequency', u32(100000000)),
             ('memory-frequency', u32(1866000000)),
             ('peripheral-frequency', u32(timebase)),
@@ -155,6 +204,59 @@ def build(seed=None, qemu=False, highmem=False):
         ('virtual-timer-intid', u32(QEMU_VTIMER_INTID if qemu else VTIMER_INTID)),
         ('reg', u64(gicd - SOC_BASE, GICD_SIZE, gicr - SOC_BASE, GICR_SIZE)),
     ])
+    arm_children = [gic,
+        # No hardware: watchdogd checks IODeviceTree:/arm-io/wdt for no-pmu and
+        # otherwise crashes trying to set the PMU boot stage (customer builds
+        # ignore the -wdt_no_pmu boot-arg).
+        node('wdt', [ph(), ('no-pmu', u32(1))]),
+        # Main display: IOMobileFramebuffer.framework counts /arm-io children
+        # with this device_type and reads the canvas size from the node;
+        # the kernel's AppleCLCD matches the compatible string.  NABU reports
+        # its native 1600x2560 panel, so AppleCLCD's native path is used.
+        node('disp0', [
+            ph(),
+            ('device_type', cstr('display-subsystem')),
+            ('compatible', cstr('sweet,display')),
+            ('canvas-width', u32(canvas_w)),
+            ('canvas-height', u32(canvas_h)),
+        ])]
+    root_children = []
+    if nabu:
+        # Minimal A4.2 platform providers.  The classes only map their window
+        # and publish a small API; SPI/touch consumers are added in the next
+        # increment.  All /arm-io regs are relative to SOC_BASE.
+        arm_children += [
+            node('tlmm', [
+                ph(),
+                ('compatible', cstr('qcom,sm8150-pinctrl')),
+                ('reg', u64(TLMM - SOC_BASE, TLMM_SIZE)),
+            ]),
+            node('cmd-db', [
+                ph(),
+                ('compatible', cstr('qcom,cmd-db')),
+                ('reg', u64(CMD_DB - SOC_BASE, CMD_DB_SIZE)),
+            ]),
+            node('apps_rsc', [
+                ph(),
+                ('compatible', cstr('qcom,tcs-drv')),
+                ('reg', u64(APPS_RSC - SOC_BASE, APPS_RSC_SIZE,
+                            APPS_RSC_TCS - SOC_BASE, APPS_RSC_TCS_SIZE)),
+            ]),
+        ]
+        # SE18/GCC sit below SOC_BASE, which the /arm-io ranges cannot express;
+        # publish them as top-level platform-device nubs like sweet-ufs.
+        root_children += [
+            node('spi@c84000', [
+                ph(),
+                ('compatible', cstr('qcom,spi-geni')),
+                ('reg', u64(SPI18, SPI18_SIZE)),
+            ]),
+            node('gcc', [
+                ph(),
+                ('compatible', cstr('qcom,gcc-sm8150')),
+                ('reg', u64(GCC, GCC_SIZE)),
+            ]),
+        ]
     arm_io = node('arm-io', [
         ph(),
         ('device_type', cstr('sweet-io')),
@@ -162,29 +264,14 @@ def build(seed=None, qemu=False, highmem=False):
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
         ('ranges', u64(0, SOC_BASE, 0x100000000 - SOC_BASE)),
-    ], [gic,
-        # No hardware: watchdogd checks IODeviceTree:/arm-io/wdt for no-pmu and
-        # otherwise crashes trying to set the PMU boot stage (customer builds
-        # ignore the -wdt_no_pmu boot-arg).
-        node('wdt', [ph(), ('no-pmu', u32(1))]),
-        # Main display: IOMobileFramebuffer.framework counts /arm-io children
-        # with this device_type and reads the canvas size from the node
-        # (the presented iPhone X size, see SweetFramebuffer.cpp);
-        # the kernel's AppleCLCD matches the compatible string.
-        node('disp0', [
-            ph(),
-            ('device_type', cstr('display-subsystem')),
-            ('compatible', cstr('sweet,display')),
-            ('canvas-width', u32(1125)),
-            ('canvas-height', u32(2436)),
-        ])])
+    ], arm_children)
 
     fbcon = node('sweet-fbcon', [
         ph(),
-        ('reg', u64(FB, FB_SIZE)),
-        ('width', u32(FB_W)),
-        ('height', u32(FB_H)),
-        ('stride', u32(FB_STRIDE)),
+        ('reg', u64(FB, fb_size)),
+        ('width', u32(fb_w)),
+        ('height', u32(fb_h)),
+        ('stride', u32(fb_stride)),
     ])
 
     # bsd/dev/sweet_ufs.c: the UFS host ABL leaves running (absolute physical reg).
@@ -209,28 +296,37 @@ def build(seed=None, qemu=False, highmem=False):
         ('opposed-power-vol-buttons', u32(1)),
     ])
 
-    product_props = d22ap_product()
-    product = [node('product', [ph()] + product_props)] if product_props else []
+    product_props = d22ap_product(product)
+    product_node = [node('product', [ph()] + product_props)] if product_props else []
 
     # Identity of the iPhone X whose userland runs here: compatible[0] is
     # hw.model/hw.target (D22AP), model is hw.machine/hw.product
-    # (iPhone10,3). 'xiaomi,sweet' stays for SweetPlatformExpert matching.
+    # (iPhone10,3). 'xiaomi,<board>' stays for SweetPlatformExpert matching.
     return node('device-tree', [
         ph(),
-        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('xiaomi,sweet') + cstr('qcom,sm7150') + cstr('AppleARM')),
+        ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr(root_compat) + cstr(soc_compat) + cstr('AppleARM')),
         ('model', cstr('iPhone10,3')),
         ('target-type', cstr('D22')),
         ('target-sub-type', cstr('D22AP')),
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] +
+       root_children + product_node + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':
-    root = build(qemu='--qemu' in sys.argv, highmem='--highmem' in sys.argv)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('out')
+    ap.add_argument('--dump', action='store_true')
+    ap.add_argument('--qemu', action='store_true')
+    ap.add_argument('--highmem', action='store_true')
+    ap.add_argument('--nabu', action='store_true')
+    ap.add_argument('--product', help='real D22AP ADT providing /product')
+    args = ap.parse_args()
+    root = build(qemu=args.qemu, highmem=args.highmem, nabu=args.nabu, product=args.product)
     blob = adt.serialize(root)
-    open(sys.argv[1], 'wb').write(blob)
-    if '--dump' in sys.argv:
+    open(args.out, 'wb').write(blob)
+    if args.dump:
         adt.dump(adt.parse(blob)[0])
-    print(f'{sys.argv[1]}: {len(blob)} bytes', file=sys.stderr)
+    print(f'{args.out}: {len(blob)} bytes (nabu={args.nabu}, qemu={args.qemu})', file=sys.stderr)
