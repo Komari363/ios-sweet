@@ -5,19 +5,26 @@
 - The nabu workspace now carries a separate `--nabu` ADT profile in `tools/mkadt.py`:
   SM8150 GIC/UFS, 1 GiB upper-bank slice at `0xc0000000`, 1600x2560 panel,
   and platform nodes for TLMM/GCC/cmd-db/apps_rsc/SE18.
-- `tools/test-mkadt.py` asserts the profile (13,588-byte ADT, all P0 nodes).
+- `tools/test-mkadt.py` asserts the profile (13,860-byte ADT after the touch
+  node, all P0 nodes).
 - `shim/build.sh BOARD=nabu` compiles the early console/`boot_args` with
   `FB_W=1600 FB_H=2560 FB_STRIDE=6400`; `DTB=` overrides the packed FDT.
 - `xnu/patches/0082-sweet-nabu-platform.patch` adds `SweetTLMM`, `SweetGCC`,
   `SweetCmdDb`; it is a no-op outside `SWEET` builds.
 - `xnu/patches/0083-sweet-geni-spi.patch` adds the polled FIFO `SweetGeniSPI`
-  provider (SE18, GPIO23-26, GCC SE18 branch, IRQ 583 not yet wired).  It is
-  compile-validated by CI run `39645919614`; device transfer is not yet tested.
-- First increment commit `21aeee2`; second increment `fcd59fc`; CI run
-  `39645919614` compiled `SweetGeniSPI.cpo` and linked the kernel.
-- Next increment: `SweetNovatekTouch` (poll or GPIO IRQ), then HID 10-point
-  reporting and UFS/display first-light payload.  A4.2 is not complete until
-  the payload boots.
+  provider (SE18, GPIO23-26, GCC SE18 branch, IRQ 583 not yet wired).
+- `xnu/patches/0084-sweet-novatek-touch.patch` adds `SweetNovatekTouch`:
+  GPIO100 VDDIO, GPIO39 polling, 65-byte packet/checksum, 10-slot HID reports.
+  `SweetHIDTouch` now takes the panel size from the boot framebuffer; NABU is
+  1600x2560.  Normal touch does not download firmware.
+- First increment commit `21aeee2`; second `fcd59fc`; third `782250e`; CI run
+  `39648771868` compiled `SweetNovatekTouch.cpo`/`SweetGeniSPI.cpo` and linked
+  kernel sha256 `cf13c50b...` (17,258,016 B).  CI run `39648137158` failed on
+  `OSPtr::get()` and was superseded after the fix.
+- Next increment: register GIC SPI 583 (or keep polling if the controller
+  needs it), then build the full `mkpayload` + `shim BOARD=nabu` image and do
+  the UFS/display first-light boot.  Device tests have not started; A4.2 is
+  not complete until the payload boots.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
