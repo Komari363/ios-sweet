@@ -10,10 +10,14 @@
   `FB_W=1600 FB_H=2560 FB_STRIDE=6400`; `DTB=` overrides the packed FDT.
 - `xnu/patches/0082-sweet-nabu-platform.patch` adds `SweetTLMM`, `SweetGCC`,
   `SweetCmdDb`; it is a no-op outside `SWEET` builds.
-- First increment commit `21aeee2`; CI run `39643216503` (see run page,
-  result recorded in the root `STATE.md` when complete).
-- Next increment: `SweetGeniSPI` + `SweetNovatekTouch`, then UFS/display
-  first-light payload.  A4.2 is not complete until the payload boots.
+- `xnu/patches/0083-sweet-geni-spi.patch` adds the polled FIFO `SweetGeniSPI`
+  provider (SE18, GPIO23-26, GCC SE18 branch, IRQ 583 not yet wired).  It is
+  compile-validated by CI run `39645919614`; device transfer is not yet tested.
+- First increment commit `21aeee2`; second increment `fcd59fc`; CI run
+  `39645919614` compiled `SweetGeniSPI.cpo` and linked the kernel.
+- Next increment: `SweetNovatekTouch` (poll or GPIO IRQ), then HID 10-point
+  reporting and UFS/display first-light payload.  A4.2 is not complete until
+  the payload boots.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
