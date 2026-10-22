@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..907f547
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetPlatform.cpp
-@@ -0,0 +1,414 @@
+@@ -0,0 +1,420 @@
 +/*
 + * SM8150 platform providers for NABU A4.2.
 + *
