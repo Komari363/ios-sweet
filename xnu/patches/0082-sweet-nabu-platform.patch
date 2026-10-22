@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..907f547
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetPlatform.cpp
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,419 @@
 +/*
 + * SM8150 platform providers for NABU A4.2.
 + *
@@ -303,9 +303,8 @@ index 0000000..907f547
 +	if (!OSObject::init()) {
 +		return false;
 +	}
-+	fWindow = NULL;
-+	fDbMap = NULL;
-+	fDb = NULL;
++	fWindowDesc = NULL;
++	fDbDesc = NULL;
 +	fDbSize = 0;
 +	fMagic = 0;
 +	return true;
@@ -317,42 +316,37 @@ index 0000000..907f547
 +	if (!IOService::start(provider)) {
 +		return false;
 +	}
-+	fWindow = provider->mapDeviceMemoryWithIndex(0);
-+	if (fWindow == NULL || fWindow->getLength() < 8) {
++	fWindowDesc = provider->getDeviceMemoryWithIndex(0);
++	if (fWindowDesc == NULL || fWindowDesc->getLength() < 8) {
 +		IOLog("SWEET CMDDB: no dictionary pointer window\n");
 +		return false;
 +	}
-+	volatile uint8_t *win = (volatile uint8_t *)fWindow->getVirtualAddress();
-+	if (win == NULL) {
-+		IOLog("SWEET CMDDB: no virtual window\n");
-+		fWindow->release();
-+		fWindow = NULL;
++	uint32_t start = 0, size = 0;
++	if (fWindowDesc->readBytes(0, &start, 4) != 4 ||
++	    fWindowDesc->readBytes(4, &size, 4) != 4) {
++		IOLog("SWEET CMDDB: cannot read pointer window\n");
 +		return false;
 +	}
-+	uint32_t start = sweet_read32(win);
-+	uint32_t size = sweet_read32(win + 4);
 +	if (start == 0 || size < SWEET_CMDD_HEADER || size > (1u << 20)) {
 +		IOLog("SWEET CMDDB: bad dictionary %u/0x%x\n", start, size);
 +		return false;
 +	}
-+	IOMemoryDescriptor *desc = IOMemoryDescriptor::withPhysicalAddress(
++	fDbDesc = IOMemoryDescriptor::withPhysicalAddress(
 +	    (IOPhysicalAddress)start, size, kIODirectionIn);
-+	if (desc == NULL) {
++	if (fDbDesc == NULL) {
 +		IOLog("SWEET CMDDB: cannot describe 0x%x+0x%x\n", start, size);
 +		return false;
 +	}
-+	fDbMap = desc->map(kIOMapDefaultCache);
-+	desc->release();
-+	if (fDbMap == NULL) {
-+		IOLog("SWEET CMDDB: cannot map 0x%x+0x%x\n", start, size);
++	uint32_t hdr[2] = { 0, 0 };
++	if (fDbDesc->readBytes(0, hdr, sizeof(hdr)) != sizeof(hdr)) {
++		IOLog("SWEET CMDDB: cannot read header\n");
 +		return false;
 +	}
-+	fDb = (volatile uint8_t *)fDbMap->getVirtualAddress();
 +	fDbSize = size;
-+	fMagic = sweet_read32(fDb + 4);
++	fMagic = hdr[1];
 +	registerService();
 +	IOLog("SWEET CMDDB: 0x%x+0x%x magic=0x%x version=0x%x\n",
-+	    start, size, fMagic, sweet_read32(fDb));
++	    start, size, fMagic, hdr[0]);
 +	if (fMagic != SWEET_CMDD_MAGIC) {
 +		IOLog("SWEET CMDDB: bad magic (want 0x%x)\n", SWEET_CMDD_MAGIC);
 +		return false;
@@ -363,15 +357,11 @@ index 0000000..907f547
 +void
 +SweetCmdDb::stop(IOService *provider)
 +{
-+	if (fDbMap != NULL) {
-+		fDbMap->release();
-+		fDbMap = NULL;
++	if (fDbDesc != NULL) {
++		fDbDesc->release();
++		fDbDesc = NULL;
 +	}
-+	if (fWindow != NULL) {
-+		fWindow->release();
-+		fWindow = NULL;
-+	}
-+	fDb = NULL;
++	fWindowDesc = NULL;
 +	fDbSize = 0;
 +	IOService::stop(provider);
 +}
@@ -380,7 +370,7 @@ index 0000000..907f547
 +SweetCmdDb::lookup(const char *resource, uint32_t *addr, uint16_t *len,
 +    uint16_t *version)
 +{
-+	if (fDb == NULL || resource == NULL || addr == NULL ||
++	if (fDbDesc == NULL || resource == NULL || addr == NULL ||
 +	    fDbSize < SWEET_CMDD_HEADER) {
 +		return false;
 +	}
@@ -389,8 +379,14 @@ index 0000000..907f547
 +		((uint8_t *)&id)[i] = (uint8_t)resource[i];
 +	}
 +	for (uint32_t r = 0; r < SWEET_CMDD_RSC_COUNT; r++) {
-+		const volatile uint8_t *rh = fDb + SWEET_CMDD_BASE +
-+		    r * SWEET_CMDD_RSC_SIZE;
++		uint8_t rh[SWEET_CMDD_RSC_SIZE];
++		uint32_t roff = SWEET_CMDD_BASE + r * SWEET_CMDD_RSC_SIZE;
++		if (roff + sizeof(rh) > fDbSize) {
++			break;
++		}
++		if (fDbDesc->readBytes(roff, rh, sizeof(rh)) != sizeof(rh)) {
++			break;
++		}
 +		uint16_t slv = sweet_read16(rh);
 +		if (slv == 0) {
 +			break;
@@ -406,7 +402,10 @@ index 0000000..907f547
 +			if (eoff + SWEET_CMDD_ENTRY_SIZE > fDbSize) {
 +				break;
 +			}
-+			const volatile uint8_t *e = fDb + eoff;
++			uint8_t e[SWEET_CMDD_ENTRY_SIZE];
++			if (fDbDesc->readBytes(eoff, e, sizeof(e)) != sizeof(e)) {
++				break;
++			}
 +			if (sweet_read64(e) != id) {
 +				continue;
 +			}
@@ -429,7 +428,7 @@ new file mode 100644
 index 0000000..bd586c4
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetPlatform.h
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,73 @@
 +/*
 + * Minimal SM8150 platform providers for the A4.2 NABU bring-up.
 + *
@@ -496,9 +495,8 @@ index 0000000..bd586c4
 +	    uint16_t *version);
 +
 +private:
-+	IOMemoryMap *fWindow;
-+	IOMemoryMap *fDbMap;
-+	volatile uint8_t *fDb;
++	IOMemoryDescriptor *fWindowDesc;
++	IOMemoryDescriptor *fDbDesc;
 +	uint32_t fDbSize;
 +	uint32_t fMagic;
 +};
