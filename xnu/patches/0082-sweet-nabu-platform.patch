@@ -323,6 +323,12 @@ index 0000000..907f547
 +		return false;
 +	}
 +	volatile uint8_t *win = (volatile uint8_t *)fWindow->getVirtualAddress();
++	if (win == NULL) {
++		IOLog("SWEET CMDDB: no virtual window\n");
++		fWindow->release();
++		fWindow = NULL;
++		return false;
++	}
 +	uint32_t start = sweet_read32(win);
 +	uint32_t size = sweet_read32(win + 4);
 +	if (start == 0 || size < SWEET_CMDD_HEADER || size > (1u << 20)) {

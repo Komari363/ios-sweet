@@ -30,7 +30,7 @@
   unpacked ramdisk equals the payload and that `SWEETXNU` is present.
   NABU uses boot header **v3** (stock NABU layout, no boot.img DTB; ABL
   supplies the live FDT).  The v2 path is preserved for SWEET.
-- First-light artifacts (host-built, not booted):
+- First-light artifacts (host-built; first boot 2026-10-23 failed at shim, see below):
   `output/a4.2/first-light/shim-boot.img` 16,855,040 B, sha256
   `cf3a843f...`; payload 16,666,688 B, sha256 `1eb8978c...`; ADT 13,860 B,
   sha256 `dbb623af...`; shim Image 180,224 B, sha256 `95884bf7...`.
@@ -44,6 +44,34 @@
   first round uses GPIO39 polling, and if there is no packet boot once with
   `sweetnovatek_poll=1` to separate SPI from the INT line.  A4.2 host build
   is complete; device validation is A5.
+
+## NABU A5 first-light (2026-10-23)
+
+- Booting `output/a4.2/first-light/shim-boot.img` (sha256 `cf3a843f...`) reached
+  `SHIM sweet milestone 4: xnu loader`, but `LOADER` reported
+  **`no SWEETXNU payload`**. `INITRD lo=84719000 hi=856FE4C3` =
+  16,667,843 B, exactly the 16,666,688-byte payload plus **1,155 B**. UFS
+  milestone 5 probe succeeded and printed GPT/iosroot/userdata, then the shim
+  reset. No XNU text, no XNU entry; no partition was written.
+- Photo/evidence: `../evidence/a5/20261023T030918-firstlight-boot/`.
+- Host fix: `shim/loader.c` now scans the first 4 KiB of the initrd for
+  `SWEETXNU`, prints `PRE=<offset>` when nonzero, and uses unaligned-safe
+  copies for the header/ADT/segments. Rebuilt image
+  `output/a4.2/first-light-fix/shim-boot.img` 16,855,040 B, sha256
+  `86e2b2da0898d4601552ba6d467408d999f3fee07f74f021a836325a83c850e4`;
+  booted 2026-10-23 03:21; screen reached `PRE=<n>` and XNU text, then
+  panicked at 03:23 (`Kernel data abort`, `handshake structure not initialized`).
+- A5-LOG after the panic: `device-cmd.sh log ring` via TWRP read 4,198,400 B,
+  sha256 `9ddbc6c8...`, byte-identical to the pre-panic empty ring;
+  `sweet-log.py` says **no SWEETLOG header**. The panic happened before the
+  `sweet_ufs` log thread could flush, so the screen photos are the only log.
+- Symbolication against the exact CI kernel (`output/a4.2/ci-39648771868`,
+  sha256 `cf13c50b...`): PC `0xfffffe0007a689f8` = `SweetCmdDb::start + 0x98`,
+  the `ldrb` immediately after `getVirtualAddress()`; the 8-byte
+  `qcom,cmd-db` window returned an invalid/NULL VA. Fix in progress: guard the
+  bad map and fail `SweetCmdDb` cleanly instead of dereferencing it; rebuild
+  with CI.
+- Device is in TWRP after the log-ring read; no partition was written.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
