@@ -68,10 +68,16 @@
 - Symbolication against the exact CI kernel (`output/a4.2/ci-39648771868`,
   sha256 `cf13c50b...`): PC `0xfffffe0007a689f8` = `SweetCmdDb::start + 0x98`,
   the `ldrb` immediately after `getVirtualAddress()`; the 8-byte
-  `qcom,cmd-db` window returned an invalid/NULL VA. Fix in progress: guard the
-  bad map and fail `SweetCmdDb` cleanly instead of dereferencing it; rebuild
-  with CI.
+  `qcom,cmd-db` window returned an invalid/NULL VA. Guard committed as
+  `3817e37` (plus `3aba735` for the 0082 hunk count).
 - Device is in TWRP after the log-ring read; no partition was written.
+- CmdDb guard CI: run `39843363148` **success** (the first run `39840918097`
+  failed because the 0082 new-file hunk count was stale after adding six
+  lines). Kernel `output/a4.2/ci-39843363148/kernel.development.sweet`
+  17,274,400 B, sha256 `40f88022...`. Rebuilt image
+  `output/a4.2/first-light-cmddb-fix/shim-boot.img` 16,855,040 B, sha256
+  `32878d20...`, header v3; not booted yet. Next: user Reboot -> Bootloader,
+  then `device-cmd.sh boot` the new image and read the screen/log ring again.
 
 ## Agent handoff / active work (2026-10-15, latest)
 
