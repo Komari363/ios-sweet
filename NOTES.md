@@ -564,3 +564,25 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - CI `39928946412` (queued) builds the fixed kernel. Next: extract kernel,
   build `first-light-mliomap-console`, `fastboot boot`, expect
   `SWEET CMDDB: 0x... magic=0xc0330db` on screen.
+
+## 2026-10-23 21:45 route5 `IOMemoryMap` — 32-bit MMIO byte access
+
+- Booted `output/a4.2/first-light-cmddb-iomap/shim-boot.img`
+  (sha256 `353388cf...`, kernel `a0e40c89...`, CI `39962024576`).
+- Panic: `PC 0xfffffe0007a689f4` = `SweetCmdDb::start+0x8c`,
+  `ldrb w8,[x0]`; `x0/far=0xfffffe4b3f2f400c`, `x4=...4000`,
+  `x16=0x0c3f000c`, `esr=0x96000010`.
+- `ESR` decode: EC `0x25` (same-EL data abort), DFSC `0x10`
+  (synchronous external abort), not a translation fault.
+- `IOMemoryMap::getVirtualAddress()` returned a valid non-NULL VA;
+  `getLength() >= 8` passed. The pointer window is a 32-bit register
+  pair at physical `0x0c3f000c`.
+- `sweet_read32()` currently does four `ldrb` byte loads. Linux at the
+  same address uses `readl_relaxed` (`drivers/soc/qcom/cmd-db.c:360`).
+  The first byte load raises an external abort on this bus.
+- ADT `cmd-db` reg is `0xb3f000c`, but it is relative to
+  `SOC_BASE=0x01000000`; `ranges` maps it to physical `0xc3f000c`.
+  Address is correct; the access size is the bug.
+- Candidate route6: make `sweet_read32()` an aligned 32-bit
+  `*(const volatile uint32_t *)p` load, rebuild, boot once. Not built
+  or booted without human approval.
