@@ -672,10 +672,12 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - GCC fix worked:
   `SWEET GCC: window 2031616 bytes, SE18 enable=0x0` and
   `SE18 branch on after 10 us`; the SPI clock path is live.
-- NVT still cannot read: every attempt logs `SWEET SPI: xfer len=3`
-  (pageSet) followed by `SWEET NVT: FWINFO read failed` or
-  `packet read error`. There is **no `SWEET SPI: xfer len=67`**, so
-  `readData()` never gets past `pageSet()`. There is no
+- NVT still cannot read: the first eight `xfer` lines are all
+  `SWEET SPI: xfer len=3` (pageSet), followed by
+  `SWEET NVT: FWINFO read failed` or `packet read error`.
+  `0084` caps xfer logging at eight transfers, so the absence of a
+  later `len=67` line is not by itself proof that `readData()` never
+  ran. There is nevertheless no `SWEET NVT: fw=` and no
   `SWEET NVT: ... packets` line in any ring so far.
 - Hypothesis: `SweetGeniSPI::transferLocked()` writes
   `GENI_M_IRQ_EN=0` before each command, so the GENI `M_CMD_DONE`
@@ -683,6 +685,12 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   bits in `geni_se_init()` before FIFO transfers.
 - Route10 commit `bebeeec` enables
   `SPI_IRQ_DONE | SPI_IRQ_ERRORS` (including `M_CMD_FAILURE_EN`) and
-  logs `irq/status/txfifo/rxfifo` on failure. CI `40007727557` was
-  queued at 03:00; no image built, nothing booted. Do not boot route9
-  again; route10 is the next single boot.
+  logs `irq/status/txfifo/rxfifo` on failure. The first CI run
+  `40007727557` failed because 0083's hunk declared 451 added lines
+  while the file had 453 (the final `#endif` fell outside the hunk)
+  and 0084 still expected `GENI_M_IRQ_EN=0`; `6a0b55c` fixes both.
+  CI `40009468130` succeeded. Image
+  `output/a4.2/first-light-geni-irq/shim-boot.img`
+  (sha256 `42e3c79c...`, kernel `f2a7aa65...`) is built but **not
+  booted**. Do not boot route9 again; route10 is the next single
+  boot.
