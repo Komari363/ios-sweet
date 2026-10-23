@@ -217,7 +217,7 @@ index 0000000..907f547
 +		return false;
 +	}
 +	fMap = provider->mapDeviceMemoryWithIndex(0);
-+	if (fMap == NULL || fMap->getLength() < 0x200000) {
++	if (fMap == NULL || fMap->getLength() < 0x1f0000) {
 +		IOLog("SWEET GCC: no register window\n");
 +		return false;
 +	}
