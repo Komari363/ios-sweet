@@ -1,5 +1,27 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-23 17:40 — cmd-db mapping, route5
+
+- Observed: `first-light-mliomap-console` (kernel `9cd1cd49...`, CI `39928946412`)
+  booted 17:12; 17:25 screen shows a new panic, not the old `x0` one:
+  `pc=0xfffffe0007a689a0` (`SweetCmdDb::start+0x44`, `ldrb w22,[x0]`),
+  `lr=0xfffffe0007a6899c` (`cbz x0`), `x0=0xffffffe342b03400c`,
+  `x4=0xffffffe342b034000`, `x1=0xfffffe1b41a84430`.
+  `ml_io_map(0x0c3f000c,8)` returned a non-NULL VA but the first byte load
+  data-aborted; no `SWEET CMDDB` line. Photos in
+  `evidence/a5/20261023T172540-mliomap-boot/`.
+- Protocol: `xnu-data-abort` had already crossed three non-L1 boots by
+  16:49. User explicitly reset it at 17:39 and approved one route5 boot.
+- Route5: `0085-sweet-cmd-db-iomap.patch` (commit `3681ec4`) uses
+  `provider->mapDeviceMemoryWithIndex(0)` + `getVirtualAddress()` for the
+  8-byte pointer window and `IOMemoryDescriptor::withPhysicalAddress(...)->map()`
+  for the dictionary. It does not use `readBytes()` or `ml_io_map()`.
+  CI `39933213742` is built by `output/a4.2/wait-build-0085.sh`; image
+  `output/a4.2/first-light-cmddb-iomap/shim-boot.img`. One boot only;
+  if it fails, stop and archive, do not auto-rotate again.
+- Do not infer success from no fastboot return: the 17:12 run stayed off
+  fastboot and still panicked at 17:25.
+
 ## NABU / A4.2 handoff (2026-10-22)
 
 - The nabu workspace now carries a separate `--nabu` ADT profile in `tools/mkadt.py`:
