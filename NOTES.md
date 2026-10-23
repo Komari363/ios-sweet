@@ -1,5 +1,30 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 00:50 — route6 succeeds; SpringBoard L4
+
+- Route6 (`sweet_read32()` as 32-bit `ldr`, commit `8a68ff7`, CI
+  `39965724600`) booted `first-light-cmddb-ldr/shim-boot.img`
+  (`e374516e...`, kernel `134f50b6...`) at 22:08:56 on 2026-10-23.
+- 22:25:33 / 22:35:02 photos show the iOS lock screen at 4:31 / 4:40,
+  charging bolt present, with `SMP SpringBoard`, `SMP backboardd` and
+  `xpcproxy` lines overlaid; no panic title.  This is the first L4
+  (SpringBoard) result.  Touch does not respond (D8 is a separate item).
+- Evidence: `evidence/a5/20261023T220900-route6-boot/` and
+  `evidence/a5/20261023T223500-route6-springboard/`.
+- A5-LOG: booted TWRP at 00:47:30 on 2026-10-24; the 00:49:16 adb was
+  TWRP, confirmed by `probe boot-hash a` at 00:50.  `device-cmd.sh log
+  ring` read 4,198,400 B (sha256 `0e592e0f...`); `sweet-log.py` parsed
+  `# version 1, ring 4194304, total 276279 bytes, flush #157`.  Key
+  lines: `SWEET CMDDB` (75), `SWEET UFS` (104), `SWEET LOG` (119),
+  `hfs: mounted iOSRoot` (122), `exec launchd` (129), `exec SpringBoard`
+  (682), `exec backboardd` (791).  **A5-LOG passes.**  Evidence:
+  `evidence/a5/20261024T005000-a5-log-pass/`.
+- Touch does not respond.  Log shows `SWEET NVT: ready` (86), then
+  `SWEET TOUCH: mapping GCC/TLMM/SE7` (1546) and
+  `SWEET TOUCH: GCC branch 0x18008 halted (0x80000002)` (1548).
+  This is the next A6 target; touch is a separate DoD item (D8).
+- No partition writes; active_slot=a.  Do not boot route6 again.
+
 ## 2026-10-23 21:57 — cmd-db mapping, route6 (32-bit MMIO)
 
 - User approved route6 after route5 failed at 21:45: the fault is the first
