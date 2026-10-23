@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-23 21:57 — cmd-db mapping, route6 (32-bit MMIO)
+
+- User approved route6 after route5 failed at 21:45: the fault is the first
+  `ldrb w8,[x0]` in `SweetCmdDb::start+0x8c`, with ESR `0x96000010`
+  (synchronous external abort), `x0=0xfffffe4b3f2f400c`, `x16=0x0c3f000c`.
+  The address is correct; the pointer window is 32-bit MMIO.
+- Change: `0082-sweet-nabu-platform.patch` now implements `sweet_read32()`
+  as `*(const volatile uint32_t *)p` instead of four byte loads.  The
+  replacement keeps the same number of lines, so the `@@ -0,0 +1,418 @@`
+  new-file hunk count is unchanged.
+- Linux uses `readl_relaxed(dict)` for the same window
+  (`reference/linux-nabu/drivers/soc/qcom/cmd-db.c:363`); all updated
+  callers are 4-byte aligned.
+- CI pending.  One boot only; if it still panics, stop and archive, do not
+  auto-rotate.  No partition writes.
+
 ## 2026-10-23 17:40 — cmd-db mapping, route5
 
 - Observed: `first-light-mliomap-console` (kernel `9cd1cd49...`, CI `39928946412`)

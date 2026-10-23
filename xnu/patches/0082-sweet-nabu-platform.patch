@@ -58,8 +58,8 @@ index 0000000..907f547
 +static inline uint32_t
 +sweet_read32(const volatile uint8_t *p)
 +{
-+	return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
-+	    (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
++	/* 32-bit MMIO: byte loads abort on the cmd-db pointer window. */
++	return *(const volatile uint32_t *)p;
 +}
 +
 +static inline uint64_t
