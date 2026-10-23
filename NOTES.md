@@ -656,3 +656,33 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
 - Candidate route6: make `sweet_read32()` an aligned 32-bit
   `*(const volatile uint32_t *)p` load, rebuild, boot once. Not built
   or booted without human approval.
+
+## 2026-10-24 03:00 route9: GCC window fixed, NVT pageSet still fails
+
+- A3 clean baseline was reflashed at 02:28:51 (`flash iosroot` rc=0,
+  24/24 chunks, 343.704s, sha256 `533a3b41...`). The device booted
+  `output/a4.2/first-light-gcc-window/shim-boot.img`
+  (sha256 `7046cf06...`, CI `39995984212`, head `86b5dc7`) at 02:35:58.
+- The user reports **touch still does not respond**. The ring (TWRP
+  `log ring`, 4,198,400 B, sha256 `834e2662...`, parser `total 285384
+  bytes, flush #106`) nevertheless shows `exec SpringBoard` and
+  `exec backboardd`, so the device reached L4 again. A3 avoided the
+  previous dirty-HFS+ lines; no `dirty`, `fsck`, or
+  `BlockMarkFreeInternal` in this ring.
+- GCC fix worked:
+  `SWEET GCC: window 2031616 bytes, SE18 enable=0x0` and
+  `SE18 branch on after 10 us`; the SPI clock path is live.
+- NVT still cannot read: every attempt logs `SWEET SPI: xfer len=3`
+  (pageSet) followed by `SWEET NVT: FWINFO read failed` or
+  `packet read error`. There is **no `SWEET SPI: xfer len=67`**, so
+  `readData()` never gets past `pageSet()`. There is no
+  `SWEET NVT: ... packets` line in any ring so far.
+- Hypothesis: `SweetGeniSPI::transferLocked()` writes
+  `GENI_M_IRQ_EN=0` before each command, so the GENI `M_CMD_DONE`
+  status may never latch. Linux enables `M_CMD_DONE_EN` and the error
+  bits in `geni_se_init()` before FIFO transfers.
+- Route10 commit `bebeeec` enables
+  `SPI_IRQ_DONE | SPI_IRQ_ERRORS` (including `M_CMD_FAILURE_EN`) and
+  logs `irq/status/txfifo/rxfifo` on failure. CI `40007727557` was
+  queued at 03:00; no image built, nothing booted. Do not boot route9
+  again; route10 is the next single boot.
