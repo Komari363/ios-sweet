@@ -1,0 +1,109 @@
+diff --git a/iokit/Kernel/arm/SweetPlatform.cpp b/iokit/Kernel/arm/SweetPlatform.cpp
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -302,6 +302,9 @@
+ 	if (!OSObject::init()) {
+ 		return false;
+ 	}
++	fWindowMap = NULL;
++	fDbMap = NULL;
++	fWindow = NULL;
+ 	fDbBase = NULL;
+ 	fDbSize = 0;
+ 	fMagic = 0;
+@@ -316,21 +319,25 @@
+ 	}
+ 
+ 	/*
+-	 * The pointer window is the 8-byte register pair at 0x0c3f000c.
+-	 * IOKit's mapDeviceMemoryWithIndex()/readBytes() path used the Apple
+-	 * CPU copy window on this port and faulted on an unmapped copy page.
+-	 * ml_io_map() is the same low-level mapper the RPMH path already uses
+-	 * successfully for this exact register pair.
++	 * Map the 8-byte qcom,cmd-db pointer window through IOKit.  The
++	 * descriptor's readBytes() copies through Apple's CPU copy window,
++	 * which is not mapped on this port; ml_io_map() also returned a VA
++	 * that faulted on this window.  mapDeviceMemoryWithIndex() uses the
++	 * platform device's memory map directly and getVirtualAddress() is
++	 * the same path SweetTLMM and SweetGCC use.
+ 	 */
+-	vm_offset_t window = ml_io_map(SWEET_CMDD_WINDOW_PA,
+-	    SWEET_CMDD_WINDOW_SIZE);
+-	if (window == 0) {
++	fWindowMap = provider->mapDeviceMemoryWithIndex(0);
++	if (fWindowMap == NULL || fWindowMap->getLength() < 8) {
+ 		IOLog("SWEET CMDDB: cannot map pointer window\n");
+ 		return false;
+ 	}
+-	uint32_t start = sweet_read32((const volatile uint8_t *)window);
+-	uint32_t size = sweet_read32((const volatile uint8_t *)window + 4);
+-	ml_io_unmap(window, SWEET_CMDD_WINDOW_SIZE);
++	fWindow = (volatile uint8_t *)fWindowMap->getVirtualAddress();
++	if (fWindow == NULL) {
++		IOLog("SWEET CMDDB: pointer window has no VA\n");
++		return false;
++	}
++	uint32_t start = sweet_read32(fWindow);
++	uint32_t size = sweet_read32(fWindow + 4);
+ 
+ 	if (start < 0x80000000u || (start & 3u) ||
+ 	    size < SWEET_CMDD_HEADER || size > (1u << 20) ||
+@@ -338,9 +345,22 @@
+ 		IOLog("SWEET CMDDB: bad dictionary 0x%x+0x%x\n", start, size);
+ 		return false;
+ 	}
+-	fDbBase = (volatile uint8_t *)ml_io_map(start, size);
++
++	IOMemoryDescriptor *desc = IOMemoryDescriptor::withPhysicalAddress(
++	    (IOPhysicalAddress)start, size, kIODirectionIn);
++	if (desc == NULL) {
++		IOLog("SWEET CMDDB: cannot describe 0x%x+0x%x\n", start, size);
++		return false;
++	}
++	fDbMap = desc->map();
++	desc->release();
++	if (fDbMap == NULL) {
++		IOLog("SWEET CMDDB: cannot map 0x%x+0x%x\n", start, size);
++		return false;
++	}
++	fDbBase = (volatile uint8_t *)fDbMap->getVirtualAddress();
+ 	if (fDbBase == NULL) {
+-		IOLog("SWEET CMDDB: cannot map 0x%x+0x%x\n", start, size);
++		IOLog("SWEET CMDDB: dictionary has no VA\n");
+ 		return false;
+ 	}
+ 	fDbSize = size;
+@@ -359,10 +379,16 @@
+ void
+ SweetCmdDb::stop(IOService *provider)
+ {
+-	if (fDbBase != NULL) {
+-		ml_io_unmap((vm_offset_t)fDbBase, fDbSize);
+-		fDbBase = NULL;
+-	}
++	if (fDbMap != NULL) {
++		fDbMap->release();
++		fDbMap = NULL;
++	}
++	if (fWindowMap != NULL) {
++		fWindowMap->release();
++		fWindowMap = NULL;
++	}
++	fWindow = NULL;
++	fDbBase = NULL;
+ 	fDbSize = 0;
+ 	IOService::stop(provider);
+ }
+diff --git a/iokit/Kernel/arm/SweetPlatform.h b/iokit/Kernel/arm/SweetPlatform.h
+--- a/iokit/Kernel/arm/SweetPlatform.h
++++ b/iokit/Kernel/arm/SweetPlatform.h
+@@ -64,6 +64,9 @@
+ 	    uint16_t *version);
+ 
+ private:
++	IOMemoryMap *fWindowMap;
++	IOMemoryMap *fDbMap;
++	volatile uint8_t *fWindow;
+ 	volatile uint8_t *fDbBase;
+ 	uint32_t fDbSize;
+ 	uint32_t fMagic;
