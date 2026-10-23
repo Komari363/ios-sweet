@@ -1,5 +1,34 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 01:35 — route8 fails at GCC window; HFS+ still corrupt
+
+- Route8 (`first-light-touch-poll/shim-boot.img`, sha256 `4a8a9319...`,
+  CMDLINE `sweetnovatek_poll=1`) booted at 01:24:17 and reached SpringBoard,
+  but touch still did not respond.  `log ring` at 01:28 (flush #31) shows:
+  `SWEET GCC: no register window`, `SWEET SPI: waiting for
+  SweetTLMM/SweetGCC`, `SWEET NVT: ready ... poll=1`, then
+  `SWEET NVT: packet read error 1/2/3`.  There is no
+  `SWEET SPI: xfer len=...` line: `configureClock()` never got a GCC
+  service, so SE18's clock was never enabled and the SPI transfer was never
+  issued.  `poll=1` itself worked.
+- Root cause: the ADT GCC node is `reg = <0x100000, 0x1f0000>`
+  (`tools/mkadt.py:49`), but `SweetGCC::start()` required
+  `getLength() >= 0x200000` and returned false.  Commit `86b5dc7` lowers
+  the check to `0x1f0000`; CI `39995984212` was queued at 01:33.  No route9
+  image has been built or booted.
+- HFS+ is still corrupted.  Route8 mounted the dirty non-journaled root
+  read-write, removed 18 orphaned files and 33 directories, then logged
+  `BlockMarkFreeInternal() ... <3058460, 1>` and
+  `<3058291, 1>` followed by `hfs_mark_inconsistent: Runtime corruption
+  detected on iOSRoot, fsck will be forced on next mount.`  The ring has no
+  actual fsck output.  Further rw boots keep writing an unfixed HFS+; an
+  offline fsck (TWRP static `fsck.hfsplus` or a Linux HFS+ host) is the
+  next safety item before more boot loops.
+- Evidence: `evidence/a5/20261024T012500-route8-touch-poll-boot/` and
+  `evidence/a5/20261024T012800-route8-touch-log/`.  Current device is TWRP
+  (booted only to read the ring); active_slot=a; no partition writes and
+  no token consumed.
+
 ## 2026-10-24 00:50 — route6 succeeds; SpringBoard L4
 
 - Route6 (`sweet_read32()` as 32-bit `ldr`, commit `8a68ff7`, CI
