@@ -5,6 +5,7 @@
  iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitcpp
  iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
 +iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
++iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
 @@ -57,6 +57,16 @@
@@ -15,6 +16,11 @@
 +    "     'IOClass'         = IOCoreSurfaceRoot;"
 +    "     'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = IOCoreSurfaceRoot;"
++    "   },"
++    "   {"
++    "     'IOClass'         = AppleCLCD;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IONameMatch'     = 'sweet,display';"
 +    "   },"
  #endif
      "   {"
