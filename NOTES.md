@@ -510,3 +510,29 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+## 2026-10-23 16:49 CmdDb `readBytes` copy-window fault
+
+- Booted `output/a4.2/first-light-descread-console/shim-boot.img`
+  (sha256 `a6b6890f...`, CI `39908237282`) after `SWEET TLMM` and before
+  `SWEET CMDDB`; screen panicked with `Kernel data abort`.
+- Symbolication against the exact CI kernel:
+  - PC `0xfffffe0007b3be0c` = `_memmove+0xbc` (`ldrb w6,[x1],#1`);
+  - LR `0xfffffe00074897d4` = `_bcopy_phys_internal+0x22c`, the `bl _memmove`.
+- Call chain: `SweetCmdDb::start` -> `IOMemoryDescriptor::readBytes(0,&start,4)`
+  -> `copypv(cppvPsrc|...|cppvKmap)` -> `bcopy_phys_internal`.
+  Registers at panic: `x0=0xfffffe8fd7eefc3c` (stack destination),
+  `x1/far=0xfffffe8fffe0000c`, `x2=4`, `x22/x16=0x0c3f000c`.
+- `bcopy_phys_internal` took the `pmap_map_cpu_windows_copy()` branch for the
+  non-page-aligned MMIO address. `pmap_cpu_windows_copy_addr()` returned
+  `0xfffffe8fffe00000`; adding `src_offset=0xc` gave the unmapped read address.
+  The Apple CPU copy window is not mapped on nabu; this is why both
+  `getVirtualAddress()` and `readBytes()` failed for the 8-byte cmd-db window.
+- Fix commit `8c9d8c1`: `SweetCmdDb` now uses `ml_io_map(0x0c3f000c, 8)` for
+  the pointer window and `ml_io_map(start,size)` for the dictionary, then reads
+  bytes with `sweet_read16/32/64`. No IOKit `readBytes`/`copypv`, no Apple
+  copy window. The same `ml_io_map` path already works for this exact register
+  pair in the RPMH cmd-db locator (patch 0062).
+- CI `39928946412` (queued) builds the fixed kernel. Next: extract kernel,
+  build `first-light-mliomap-console`, `fastboot boot`, expect
+  `SWEET CMDDB: 0x... magic=0xc0330db` on screen.
