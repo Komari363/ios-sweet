@@ -16,11 +16,17 @@
   `provider->mapDeviceMemoryWithIndex(0)` + `getVirtualAddress()` for the
   8-byte pointer window and `IOMemoryDescriptor::withPhysicalAddress(...)->map()`
   for the dictionary. It does not use `readBytes()` or `ml_io_map()`.
-  CI `39933213742` is built by `output/a4.2/wait-build-0085.sh`; image
-  `output/a4.2/first-light-cmddb-iomap/shim-boot.img`. One boot only;
-  if it fails, stop and archive, do not auto-rotate again.
+  CI `39933213742` queued 15 min then its job was `cancelled` (no log steps;
+  not a compile failure). A macos-13 dispatch, `39935732222`, was queued at
+  17:58 and was still queued when the user paused at 18:11. No 0085 image
+  exists yet and it has not been booted. One boot only after a successful
+  build; if it fails, stop and archive, do not auto-rotate again.
 - Do not infer success from no fastboot return: the 17:12 run stayed off
   fastboot and still panicked at 17:25.
+- **Paused 18:11 for user outing.** Device left in fastboot; no partition
+  writes, no token consumed, no background agent waiting on the device.
+  Resume by checking `39935732222`; rebuild/download with
+  `output/a4.2/wait-build-0085.sh` (RUN may need updating), then boot once.
 
 ## NABU / A4.2 handoff (2026-10-22)
 
