@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..8e22e59
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,453 @@
 +/*
 + * Polled GENI SPI provider for NABU (SE18 @ 0xc84000).
 + *

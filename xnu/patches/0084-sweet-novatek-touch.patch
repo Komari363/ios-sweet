@@ -59,7 +59,7 @@ index 8e22e59..6682216 100644
 +		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
 +		    len, cs, hz, fFifoDepth, fFifoWidth);
 +	}
- 	writeReg(GENI_M_IRQ_EN, 0);
+ 	writeReg(GENI_M_IRQ_EN, SPI_IRQ_DONE | SPI_IRQ_ERRORS);
  	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
  	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
 diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
