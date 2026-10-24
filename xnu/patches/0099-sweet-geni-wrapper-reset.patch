@@ -1,0 +1,42 @@
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp	2026-10-25 05:21:17.637221984 +0800
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp	2026-10-25 05:21:17.649417976 +0800
+@@ -136,6 +136,7 @@
+ 	fTestTimer = NULL;
+ 	fTLMMService = NULL;
+ 	fGCCService = NULL;
++	fSEResetDone = false;
+ 	fFifoDepth = 0;
+ 	fFifoWidth = 0;
+ 	fRxDepth = 0;
+@@ -323,6 +324,21 @@
+ 	if (gcc == NULL) {
+ 		return false;
+ 	}
++	/*
++	 * Route21: reset the QUPv3 wrap2 block once before the first SE18
++	 * enable.  SweetGCC::resetSE() existed but was never called; route20
++	 * showed that bypassing the S_AHB halt was not sufficient for
++	 * M_CMD_DONE.  A wrapper reset clears any bootloader-left sequencer
++	 * state and the S_AHB branch before the first command.
++	 */
++	if (!fSEResetDone) {
++		IOReturn rr = gcc->resetSE(18);
++		if (rr != kIOReturnSuccess) {
++			IOLog("SWEET SPI: SE18 wrapper reset failed 0x%x\n", rr);
++			return false;
++		}
++		fSEResetDone = true;
++	}
+ 	IOReturn ret = gcc->enableSE(18);
+ 	if (ret != kIOReturnSuccess) {
+ 		IOLog("SWEET SPI: SE18 clock enable failed 0x%x\n", ret);
+--- a/iokit/Kernel/arm/SweetGeniSPI.h	2026-10-25 05:21:17.645352646 +0800
++++ b/iokit/Kernel/arm/SweetGeniSPI.h	2026-10-25 05:21:17.645352646 +0800
+@@ -47,6 +47,7 @@
+ 	IOTimerEventSource *fTestTimer;
+ 	IOService *fTLMMService;
+ 	IOService *fGCCService;
++	bool fSEResetDone;
+ 	uint32_t fFifoDepth;
+ 	uint32_t fFifoWidth;
+ 	uint32_t fRxDepth;
