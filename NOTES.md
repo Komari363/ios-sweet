@@ -1,23 +1,29 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## 2026-10-24 18:20 — panic-routing: ABL retries the same one-shot shim
+## 2026-10-24 18:20 — panic-routing: no fastboot; earlier retry reading retracted
 
 - Probe `0095-sweet-panic-probe.patch` (`8cd6eb7`, CI `40083963406`
   success) panics in `sweet_ufs_init` after `SWEET UFS`, before HFS+
   mount/log start. Image `output/a4.2/first-light-panic-probe/shim-boot.img`
   sha256 `8a94f7c9...`; CMDLINE `sweetpanic=1 ufsrw=0 rootrw=0`.
-- Booted once at 18:15:25. Screenshot 18:18:17 shows
-  `SWEET UFS ... read-only`, `SWEET PANIC PROBE ...`, then
-  `panic(...): SWEET-PANIC-PROBE @sweet_ufs.c:667`; below it the
-  device re-enters `iBoot version: sweet-shim` and initializes again.
-  It did **not** enter fastboot or Android.
-- Conclusion: ABL retries the same one-shot `fastboot boot` image after
-  panic reset (bootonce/retry). Panic therefore causes a
-  `panic -> same shim -> panic` loop and cannot be used as an automatic
-  transport to fastboot/TWRP. No partition write; HFS+ was not mounted.
-- Device is in the retry loop; human must long-press power 10–15 s, then
-  volume-down + power to fastboot. Do not boot this probe again.
-- Evidence: `evidence/a5/20261024T181525-panic-routing-boot/panic-181817.jpg`.
+- Booted once at 18:15:25. The 18:18:17 screenshot was initially read as
+  "after panic, the device re-enters `iBoot version: sweet-shim`". That
+  reading is **retracted**.
+- 2026-10-25 02:26 user correction: photo `02:21:53` has no panic;
+  photo `02:23:54` has panic. The console overwrites from the top when
+  full, so the visible `iBoot version: sweet-shim` is **before** the
+  panic, not a post-panic second boot. The 18:18:17 shim line is also
+  likely a scroll-order artifact.
+- Confirmed: after panic there is no visible new `iBoot version` and no
+  fastboot/Android. This looks like the panic handler staying in
+  panic/debugger, not ABL retry. The screen also shows
+  `SWEET WDT ... never fires`, so no watchdog reset is expected.
+- Conclusion: panic is not a usable automatic reset path. Test a
+  `reboot` probe next, not another panic. No partition write; HFS+ was
+  not mounted. Do not boot the panic probe again.
+- Evidence: `evidence/a5/20261025T022138-panic-routing-reboot/`
+  (`no-panic-022153.jpg`, `panic-022354.jpg`); earlier 18:18:17 photo
+  `evidence/a5/20261024T181525-panic-routing-boot/panic-181817.jpg`.
 
 ## 2026-10-24 15:31 — route14: SE18 root was off, but command still never completes
 
