@@ -1,6 +1,6 @@
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -607,10 +607,28 @@
+@@ -607,10 +607,29 @@
  static int
  sweet_boot_probe_halt_restart(__unused unsigned int type)
  {
@@ -22,6 +22,7 @@
 +	    sweet_boot_probe_delay_ms, ticks);
 +	(void)tsleep(&sweet_boot_probe_delay_ms, PZERO, "sweetboot", ticks);
 +	printf("SWEET BOOT PROBE: delayed reset now\n");
++	PE_halt_restart = &sweet_boot_probe_halt_restart;
 +	(void)reboot_kernel(RB_QUICK | RB_NOSYNC, NULL);
 +	panic("SWEET-BOOT-PROBE: delayed reboot_kernel returned");
 +}
@@ -29,7 +30,7 @@
  static int
  sweet_ufs_init(void)
  {
-@@ -697,13 +715,22 @@
+@@ -697,13 +716,21 @@
  	int sweetboot = 0;
  	if (PE_parse_boot_argn("sweetboot", &sweetboot, sizeof(sweetboot)) &&
  	    sweetboot != 0) {
@@ -49,7 +50,6 @@
 +		if (sweet_boot_probe_delay_ms <= 0) {
 +			sweet_boot_probe_delay_ms = 300000;
 +		}
-+		PE_halt_restart = &sweet_boot_probe_halt_restart;
 +		if (kernel_thread_start(sweet_boot_probe_delay_thread, NULL,
 +		    &thread) == KERN_SUCCESS) {
 +			thread_deallocate(thread);
