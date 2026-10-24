@@ -1,0 +1,26 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -593,12 +593,20 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	 * it at 1 through the final wait and still timed out.
+ 	 */
+ 	if (txb != NULL) {
++		uint32_t drain_spins = 0;
++		while (readReg(GENI_TX_FIFO_STATUS) != 0) {
++			if (++drain_spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++				break;
++			}
++			IODelay(SPI_TIMEOUT_STEP_US);
++		}
+ 		writeReg(GENI_TX_WATERMARK, 0);
+ 		if (fXferCount == 1) {
+-			IOLog("SWEET SPI: twm off status=0x%x txfifo=0x%x twm=0x%x\n",
+-			    readReg(GENI_STATUS), readReg(GENI_TX_FIFO_STATUS),
++			IOLog("SWEET SPI: twm off drain spins=%u status=0x%x txfifo=0x%x twm=0x%x\n",
++			    drain_spins, readReg(GENI_STATUS),
++			    readReg(GENI_TX_FIFO_STATUS),
+ 			    readReg(GENI_TX_WATERMARK));
+ 		}
+ 	}
+ 
+ 	spins = 0;
