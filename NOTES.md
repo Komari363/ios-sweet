@@ -900,5 +900,32 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   with TWM held high.
 - route18 (`0093`, `77b1256`, CI `40081160424`) therefore keeps TWM=1,
   polls `TX_FIFO_STATUS` until it reads 0, then clears TWM and waits for
-  `M_CMD_DONE`; image `f3f0d9b6...` booted at 17:25:50. The screen/console
-  result was still pending when this note was written.
+  `M_CMD_DONE`; image `f3f0d9b6...` booted at 17:25:50. Console at 17:26:
+  `twm off drain spins=150001 status=0x31 txfifo=0x10000000 twm=0x0`,
+  then `cmd timeout ... txfifo=0x10000000 ... twm=0x0`. The drain ran the
+  full 1.5 s and never saw 0; `0x10000000` is very likely the TX FIFO empty
+  flag, so this drain predicate is invalid. route18 failed 2/3.
+
+## 2026-10-24 17:40 route19: S_AHB is hardware-voted and must not be fatal
+
+- `0094` (`70100fc`, CI `40082126209`, image `bb1c85ab...`) set
+  `0x52014` bit1/bit2/bit5 (wrap2 S_AHB, wrap2 M_AHB, SE18) and waited for
+  bit31 of `0x1e008` / `0x1e004` / `0x1e274` to clear. It booted at 17:39:24.
+- Console showed the same five lines in a loop:
+  `clock enable failed 0xe00002d6`,
+  `SE18 root before cmd=0x2 cfg=0x1 ... branch=0x26 halt=0x4220`,
+  `SE18 root already 19.2 MHz`,
+  `SE18 branch did not halt-clear (m=0x0 s=0x80000002 se=0x4220)`.
+- `branch=0x26` proves bits 1/2/5 are set. `m=0x0` means the M_AHB halt
+  bit31 is clear (on); `se=0x4220` means SE18 is on. `s=0x80000002` keeps
+  bit31 set: the S_AHB branch is hardware-voted off and does not turn on
+  from this register write alone.
+- `enableSE()` requires all three halt bits clear, so S_AHB alone returns
+  timeout; `configureClock()` fails and `transferLocked()` returns before
+  any `xfer`/`M_CMD0`. **SPI was never called.** This is not evidence that
+  AHB-on still leaves SPI stuck; it invalidates the fatal S_AHB wait.
+- route19 failed 3/3. The current `sweet-touch-spi-cmd` generation
+  (route17-19) is exhausted and escalated; do not auto-start route20.
+  Next candidate (not implemented): require only M_AHB + SE18, or skip the
+  AHB halt wait entirely, then enter `configureSE()`/SPI and see whether
+  `xfer len=3` appears. Do not re-boot route19.
