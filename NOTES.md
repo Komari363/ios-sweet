@@ -1,5 +1,30 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 04:35 — A3 reboot bootloader: late re-enum, not proven negative
+
+- The 04:17–04:31 experiment was first recorded as a negative result, but
+  the script output actually says `reboot-bootloader-fastboot` **rc=124**:
+  the helper used `FB_TIMEOUT=30` and gave up after 30 s, before its own
+  serial-wait loop could run.  At 04:30:36 `fastboot devices` still showed
+  `????????????`.
+- Windows PnP `DEVPKEY_Device_LastArrivalDate` for
+  `USB\VID_18D1&PID_D00D\9E34EDEC` is **04:34:25**; at 04:35:40
+  `fastboot devices` returned `9e34edec` and `probe slot` was `a`.
+  The re-enumeration was therefore about 4 min 24 s after the A3 flash.
+- **Conditional conclusion:** if there was no manual USB replug/reboot
+  between 04:30:36 and 04:34:25, `fastboot reboot bootloader` did take
+  effect, and the helper timeout was simply too short.  If the user did
+  replug, the command remains unproven this round.  This is recorded in
+  root `STUCK.md#卡点-a3-fastboot-serial`.
+- Candidate for the next test: wait at least 5 minutes, do not treat
+  `rc=124` as immediate failure, continue polling for a valid serial;
+  still accept only one fastboot device and write nothing.  The candidate
+  patch was reverted from `device-cmd.sh`; diff is in
+  `evidence/a5/20261025T041706-a3-reboot-bootloader/candidate.diff`.
+- Device is fastboot, serial `9e34edec`, `active_slot=a`; A3 is clean and
+  no iOS boot followed the 04:30 flash.  No boot_a/b, vbmeta, misc or
+  userdata writes.
+
 ## 2026-10-25 04:04 — sweetboot 5-minute delayed reset works; A3 fastboot serial caveat
 
 - `0097-sweet-boot-delay.patch` (`31d5bc6`, CI `40126413434` success)
