@@ -1,5 +1,27 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 05:48 — route21 wrapper reset: no adb/fastboot after 900 s
+
+- route20 (`0098`, `18c38cb9...`) did reach `xfer len=3`: `S_AHB still
+  voted (s=0x80000002); continuing`, `SE18 ahb`, `SE init` all appear.
+  But the first command still times out with `status=0x31`,
+  `irq=0x40000000`, `txfifo=0x10000000`; `M_CMD_DONE` never sets, no
+  `xfer len=41/67`, no `fw=`/`packets`.  Ring `70f8c4f5...`, evidence
+  `evidence/a5/20261025T050829-route20-boot/`.  Route20 = 1/3.
+- route21 (`0099`, `bd4dacb`, CI `40133860120` success) calls the
+  previously unused `SweetGCC::resetSE(18)` once before `enableSE(18)`.
+  Image `45d4cf25...`; booted 05:33:10.
+- A3 round before route21: `flash iosroot` rc=0, 344.387 s; the new
+  `--reboot-bootloader` command hit `rc=124` at 30 s but kept polling and
+  recovered serial `9e34edec` at 05:33:05 — **the A3 re-enumeration is now
+  automatic, no replug/manual reboot**.
+- route21: at 05:48:10 (900 s) still no adb and no fastboot.  No TWRP ring
+  and no A3 reflash followed.  Device state unknown; manual screen check
+  and force-fastboot required.  Conservatively route21 = 2/3.
+- Evidence: `evidence/a5/20261025T053310-route21-boot/` (cycle log only),
+  `evidence/a5/20261025T053000-route21-build/`,
+  `evidence/device-cmd/20261025T052251-flash_iosroot/`.
+
 ## 2026-10-25 05:08 — route20: S_AHB is not a fatal SE18 condition
 
 - `0098-sweet-gcc-s-ahb-nonfatal.patch` (`f25713e`, CI `40132235849`
