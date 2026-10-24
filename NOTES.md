@@ -868,3 +868,37 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   (sha256 `42e3c79c...`, kernel `f2a7aa65...`) is built but **not
   booted**. Do not boot route9 again; route10 is the next single
   boot.
+
+## 2026-10-24 16:50 route16: Linux command order still times out
+
+- `0091` (`5603996`, CI `40078906456`) changed `transferLocked()` to
+  `M_CMD0 -> TX_WATERMARK=1 -> fill TX FIFO` and added `cmd start` /
+  `twm on` / timeout `twm=` logs. Image
+  `output/a4.2/first-light-geni-linux-order/shim-boot.img`
+  (sha256 `0f8844fb...`) booted at 16:49:52.
+- Console confirmed the new order and then failed on the first 3-byte
+  transfer:
+  `cmd start ... status=0x31 txfifo=0x0 twm=0x0`,
+  `twm on ... twm=0x1`,
+  `cmd timeout ... status=0x31 irq=0x40000000 en=0x7f00000f txfifo=0x0 twm=0x1`.
+- `M_CMD_DONE` (bit 0) still never set, even though `M_IRQ_EN` contains
+  bit 0. `twm=1` at timeout shows route16 did not clear TWM after the
+  last byte; Linux does so in `geni_spi_handle_tx()` before waiting for
+  completion. This is the remaining difference.
+- The later `irq=0x40000002` is TX watermark plus `M_CMD_OVERRUN` on
+  a transfer issued while the first command was still active, not a
+  FIFO data error.
+- route16 is the third consecutive no-milestone route after the human
+  reset: route13 1/3, route14 2/3, route15 2/3, route16 3/3. The
+  `sweet-touch-spi-cmd` generation is exhausted and marked for
+  escalation. The `0092` candidate clears TWM after the FIFO fill and
+  was booted as route17 at 17:09:55 (sha256 `e1344891...`).
+- route17 also failed: `twm off ... txfifo=0x10000000 twm=0x0`, then
+  `cmd timeout ... txfifo=0x10000000 ... twm=0x0`. The FIFO status did
+  not drain, and `M_CMD_DONE` was still absent. Clearing TWM immediately
+  after the FIFO write is too early; route16 had `txfifo=0x0` at timeout
+  with TWM held high.
+- route18 (`0093`, `77b1256`, CI `40081160424`) therefore keeps TWM=1,
+  polls `TX_FIFO_STATUS` until it reads 0, then clears TWM and waits for
+  `M_CMD_DONE`; image `f3f0d9b6...` booted at 17:25:50. The screen/console
+  result was still pending when this note was written.
