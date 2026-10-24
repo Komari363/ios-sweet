@@ -1,0 +1,24 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -586,7 +586,19 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 			writeReg(GENI_TX_FIFO, word);
+ 		}
+ 	}
+-	/* TX_WATERMARK stays asserted until the final M_CMD_DONE. */
++	/*
++	 * Linux clears TX_WATERMARK as soon as the last byte has been written,
++	 * before waiting for M_CMD_DONE (geni_spi_handle_tx()).  Route16 held
++	 * it at 1 through the final wait and still timed out.
++	 */
++	if (txb != NULL) {
++		writeReg(GENI_TX_WATERMARK, 0);
++		if (fXferCount == 1) {
++			IOLog("SWEET SPI: twm off status=0x%x txfifo=0x%x twm=0x%x\n",
++			    readReg(GENI_STATUS), readReg(GENI_TX_FIFO_STATUS),
++			    readReg(GENI_TX_WATERMARK));
++		}
++	}
+ 
+ 	spins = 0;
+ 	while (rxb != NULL && rx_off < len) {
