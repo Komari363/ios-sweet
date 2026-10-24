@@ -1,0 +1,51 @@
+diff --git a/iokit/Kernel/arm/SweetPlatform.cpp b/iokit/Kernel/arm/SweetPlatform.cpp
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -32,5 +32,9 @@
+ #define SWEET_GCC_SE18_ENABLE    0x00052014u
+ #define SWEET_GCC_SE18_ENABLE_BIT 5
++#define SWEET_GCC_WRAP2_M_AHB_ENABLE_BIT 2
++#define SWEET_GCC_WRAP2_S_AHB_ENABLE_BIT 1
++#define SWEET_GCC_WRAP2_M_AHB_HALT 0x0001e004u
++#define SWEET_GCC_WRAP2_S_AHB_HALT 0x0001e008u
+ #define SWEET_GCC_SE18_HALT      0x0001e274u
+ #define SWEET_GCC_QUPV3_WRAP2_BCR 0x0001e000u
+ #define SWEET_GCC_QUPV3_WRAP2_S1_CMD 0x0001e278u
+@@ -378,17 +382,31 @@ SweetGCC::enableSE(uint32_t se)
+ 		return root;
+ 	}
+ 	uint32_t v = fBase[SWEET_GCC_SE18_ENABLE / 4];
+-	v |= 1u << SWEET_GCC_SE18_ENABLE_BIT;
++	v |= (1u << SWEET_GCC_WRAP2_M_AHB_ENABLE_BIT) |
++	    (1u << SWEET_GCC_WRAP2_S_AHB_ENABLE_BIT) |
++	    (1u << SWEET_GCC_SE18_ENABLE_BIT);
+ 	fBase[SWEET_GCC_SE18_ENABLE / 4] = v;
+-	/* BRANCH_HALT_VOTED: bit 31 clears when the branch is on. */
++	/*
++	 * BRANCH_HALT_VOTED: bit 31 clears when the branch is on.  The
++	 * wrapper's M/S AHB branches share 0x52014 with the SE18 branch;
++	 * route19 enables them together because the SE command/FIFO state
++	 * machine needs the wrapper AHB clocks, not only the SE clock.
++	 */
+ 	for (int i = 0; i < 1000; i++) {
+-		if (!(fBase[SWEET_GCC_SE18_HALT / 4] & (1u << 31))) {
+-			IOLog("SWEET GCC: SE18 branch on after %d us\n", i * 10);
++		uint32_t m = fBase[SWEET_GCC_WRAP2_M_AHB_HALT / 4];
++		uint32_t s = fBase[SWEET_GCC_WRAP2_S_AHB_HALT / 4];
++		uint32_t se18 = fBase[SWEET_GCC_SE18_HALT / 4];
++		if (!(m & (1u << 31)) && !(s & (1u << 31)) &&
++		    !(se18 & (1u << 31))) {
++			IOLog("SWEET GCC: SE18 ahb m=0x%x s=0x%x branch on after %d us\n",
++			    m, s, i * 10);
+ 			return kIOReturnSuccess;
+ 		}
+ 		IODelay(10);
+ 	}
+-	IOLog("SWEET GCC: SE18 branch did not halt-clear (halt=0x%x)\n",
+-	    fBase[SWEET_GCC_SE18_HALT / 4]);
++	IOLog("SWEET GCC: SE18 branch did not halt-clear (m=0x%x s=0x%x se=0x%x)\n",
++	    fBase[SWEET_GCC_WRAP2_M_AHB_HALT / 4],
++	    fBase[SWEET_GCC_WRAP2_S_AHB_HALT / 4],
++	    fBase[SWEET_GCC_SE18_HALT / 4]);
+ 	return kIOReturnTimeout;
+ }
