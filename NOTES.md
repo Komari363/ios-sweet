@@ -1,6 +1,6 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
-## 2026-10-25 04:35 — A3 reboot bootloader: late re-enum, not proven negative
+## 2026-10-25 04:40 — A3 reboot bootloader: confirmed late success
 
 - The 04:17–04:31 experiment was first recorded as a negative result, but
   the script output actually says `reboot-bootloader-fastboot` **rc=124**:
@@ -10,13 +10,12 @@
 - Windows PnP `DEVPKEY_Device_LastArrivalDate` for
   `USB\VID_18D1&PID_D00D\9E34EDEC` is **04:34:25**; at 04:35:40
   `fastboot devices` returned `9e34edec` and `probe slot` was `a`.
-  The re-enumeration was therefore about 4 min 24 s after the A3 flash.
-- **Conditional conclusion:** if there was no manual USB replug/reboot
-  between 04:30:36 and 04:34:25, `fastboot reboot bootloader` did take
-  effect, and the helper timeout was simply too short.  If the user did
-  replug, the command remains unproven this round.  This is recorded in
-  root `STUCK.md#卡点-a3-fastboot-serial`.
-- Candidate for the next test: wait at least 5 minutes, do not treat
+  The re-enumeration was about 4 min 24 s after the A3 flash.
+- **Confirmed:** the user did not replug USB or reboot manually; the
+  device completed the reboot itself.  `fastboot reboot bootloader` did
+  take effect; the 30 s helper timeout (and even 45 s) was simply too
+  short.  Recorded in root `STUCK.md#卡点-a3-fastboot-serial`.
+- Candidate for the next test: wait at least 300–360 s, do not treat
   `rc=124` as immediate failure, continue polling for a valid serial;
   still accept only one fastboot device and write nothing.  The candidate
   patch was reverted from `device-cmd.sh`; diff is in
