@@ -1,0 +1,143 @@
+diff --git a/iokit/Kernel/arm/SweetPlatform.cpp b/iokit/Kernel/arm/SweetPlatform.cpp
+index 74fdde2..3917138 100644
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -33,6 +33,16 @@ extern "C" void ml_io_unmap(vm_offset_t, vm_size_t);
+ #define SWEET_GCC_SE18_ENABLE_BIT 5
+ #define SWEET_GCC_SE18_HALT      0x0001e274u
+ #define SWEET_GCC_QUPV3_WRAP2_BCR 0x0001e000u
++#define SWEET_GCC_QUPV3_WRAP2_S1_CMD 0x0001e278u
++#define SWEET_GCC_QUPV3_WRAP2_S1_CFG 0x0001e27cu
++#define SWEET_GCC_QUPV3_WRAP2_S1_M   0x0001e280u
++#define SWEET_GCC_QUPV3_WRAP2_S1_N   0x0001e284u
++#define SWEET_GCC_QUPV3_WRAP2_S1_D   0x0001e288u
++#define SWEET_GCC_QUPV3_WRAP2_S1_DFS 0x0001e28cu
++
++#define SWEET_GCC_RCG_CMD_UPDATE 0x00000001u
++#define SWEET_GCC_RCG_CMD_ROOT_EN 0x00000002u
++#define SWEET_GCC_RCG_CMD_ROOT_OFF 0x80000000u
+ 
+ #define SWEET_CMDD_WINDOW_PA     0x0c3f000cu
+ #define SWEET_CMDD_WINDOW_SIZE   8u
+@@ -250,6 +260,109 @@ SweetGCC::write32(uint32_t off, uint32_t value)
+ 	}
+ }
+ 
++/*
++ * The SE18 branch at 0x52014 bit 5 can assert "on" while its parent RCG
++ * is still parked or running at a bootloader-selected rate.  Check the
++ * QUPv3 wrap2 s1 root clock first; if it is not the simple 19.2 MHz CXO
++ * / divider-1 configuration assumed by SweetGeniSPI::configureClock(),
++ * program that configuration and force the root on.
++ */
++static IOReturn
++sweet_gcc_configure_se18_root(volatile uint32_t *base)
++{
++	uint32_t cmd = base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4];
++	uint32_t cfg = base[SWEET_GCC_QUPV3_WRAP2_S1_CFG / 4];
++	uint32_t m = base[SWEET_GCC_QUPV3_WRAP2_S1_M / 4];
++	uint32_t n = base[SWEET_GCC_QUPV3_WRAP2_S1_N / 4];
++	uint32_t d = base[SWEET_GCC_QUPV3_WRAP2_S1_D / 4];
++	uint32_t dfs = base[SWEET_GCC_QUPV3_WRAP2_S1_DFS / 4];
++	uint32_t halt = base[SWEET_GCC_SE18_HALT / 4];
++	uint32_t branch = base[SWEET_GCC_SE18_ENABLE / 4];
++
++	IOLog("SWEET GCC: SE18 root before cmd=0x%x cfg=0x%x m=0x%x n=0x%x d=0x%x dfs=0x%x branch=0x%x halt=0x%x\n",
++	    cmd, cfg, m, n, d, dfs, branch, halt);
++
++	/*
++	 * CFG: divider 1, parent 0 (BI_TCXO 19.2 MHz), single-edge mode,
++	 * no hardware clock control.  DFS is accepted only when clear.
++	 */
++	bool cfg_ok = ((cfg & 0x1fu) == 1u) &&
++	    (((cfg >> 8) & 0x7u) == 0u) &&
++	    ((cfg & 0x3000u) == 0u) &&
++	    ((cfg & (1u << 20)) == 0u) &&
++	    ((dfs & 1u) == 0u);
++	bool root_off = (cmd & SWEET_GCC_RCG_CMD_ROOT_OFF) != 0;
++
++	if (!root_off && cfg_ok) {
++		IOLog("SWEET GCC: SE18 root already 19.2 MHz\n");
++		return kIOReturnSuccess;
++	}
++
++	if (cmd & SWEET_GCC_RCG_CMD_UPDATE) {
++		IOLog("SWEET GCC: SE18 root update stuck before config\n");
++		return kIOReturnTimeout;
++	}
++
++	if (dfs & 1u) {
++		IOLog("SWEET GCC: SE18 root DFS enabled; clearing for direct RCG\n");
++		base[SWEET_GCC_QUPV3_WRAP2_S1_DFS / 4] = dfs & ~1u;
++	}
++
++	base[SWEET_GCC_QUPV3_WRAP2_S1_M / 4] = 0;
++	base[SWEET_GCC_QUPV3_WRAP2_S1_N / 4] = 0;
++	base[SWEET_GCC_QUPV3_WRAP2_S1_D / 4] = 0;
++	base[SWEET_GCC_QUPV3_WRAP2_S1_CFG / 4] =
++	    (1u << 0); /* div 1, CXO parent, single edge */
++
++	cmd = base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] &
++	    ~SWEET_GCC_RCG_CMD_ROOT_OFF;
++	base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] =
++	    cmd | SWEET_GCC_RCG_CMD_UPDATE;
++
++	int i;
++	for (i = 0; i < 500; i++) {
++		if (!(base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] &
++		    SWEET_GCC_RCG_CMD_UPDATE)) {
++			break;
++		}
++		IODelay(1);
++	}
++	if (i == 500) {
++		IOLog("SWEET GCC: SE18 root update did not clear\n");
++		return kIOReturnTimeout;
++	}
++
++	cmd = base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] &
++	    ~SWEET_GCC_RCG_CMD_ROOT_OFF;
++	base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] =
++	    cmd | SWEET_GCC_RCG_CMD_ROOT_EN;
++	for (i = 0; i < 1000; i++) {
++		if (!(base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4] &
++		    SWEET_GCC_RCG_CMD_ROOT_OFF)) {
++			break;
++		}
++		IODelay(10);
++	}
++	if (i == 1000) {
++		IOLog("SWEET GCC: SE18 root did not turn on cmd=0x%x\n",
++		    base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4]);
++		return kIOReturnTimeout;
++	}
++
++	cmd = base[SWEET_GCC_QUPV3_WRAP2_S1_CMD / 4];
++	cfg = base[SWEET_GCC_QUPV3_WRAP2_S1_CFG / 4];
++	dfs = base[SWEET_GCC_QUPV3_WRAP2_S1_DFS / 4];
++	IOLog("SWEET GCC: SE18 root after cmd=0x%x cfg=0x%x dfs=0x%x\n",
++	    cmd, cfg, dfs);
++	if ((cmd & SWEET_GCC_RCG_CMD_ROOT_OFF) ||
++	    (cfg & 0x1fu) != 1u || ((cfg >> 8) & 0x7u) != 0u ||
++	    (dfs & 1u)) {
++		IOLog("SWEET GCC: SE18 root readback mismatch\n");
++		return kIOReturnError;
++	}
++	return kIOReturnSuccess;
++}
++
+ IOReturn
+ SweetGCC::enableSE(uint32_t se)
+ {
+@@ -259,6 +372,11 @@ SweetGCC::enableSE(uint32_t se)
+ 	if (se != 18) {
+ 		return kIOReturnUnsupported;
+ 	}
++	IOReturn root = sweet_gcc_configure_se18_root(fBase);
++	if (root != kIOReturnSuccess) {
++		IOLog("SWEET GCC: SE18 root clock not ready (0x%x)\n", root);
++		return root;
++	}
+ 	uint32_t v = fBase[SWEET_GCC_SE18_ENABLE / 4];
+ 	v |= 1u << SWEET_GCC_SE18_ENABLE_BIT;
+ 	fBase[SWEET_GCC_SE18_ENABLE / 4] = v;
