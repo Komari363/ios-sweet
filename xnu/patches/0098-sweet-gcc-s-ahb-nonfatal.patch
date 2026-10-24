@@ -1,0 +1,22 @@
+--- a/iokit/Kernel/arm/SweetPlatform.cpp	2026-10-25 04:58:43.275697900 +0800
++++ b/iokit/Kernel/arm/SweetPlatform.cpp	2026-10-25 04:58:43.291378200 +0800
+@@ -396,8 +396,17 @@
+ 		uint32_t m = fBase[SWEET_GCC_WRAP2_M_AHB_HALT / 4];
+ 		uint32_t s = fBase[SWEET_GCC_WRAP2_S_AHB_HALT / 4];
+ 		uint32_t se18 = fBase[SWEET_GCC_SE18_HALT / 4];
+-		if (!(m & (1u << 31)) && !(s & (1u << 31)) &&
+-		    !(se18 & (1u << 31))) {
++		/*
++		 * Route20: M_AHB and SE18 are the branches this driver actually
++		 * consumes.  S_AHB may stay hardware-voted (bit 31 set) even
++		 * after the enable bit is written; do not make that a fatal
++		 * timeout, because it prevents the SE command/FIFO path from
++		 * ever being exercised.
++		 */
++		if (!(m & (1u << 31)) && !(se18 & (1u << 31))) {
++			if (s & (1u << 31)) {
++				IOLog("SWEET GCC: S_AHB still voted (s=0x%x); continuing\n", s);
++			}
+ 			IOLog("SWEET GCC: SE18 ahb m=0x%x s=0x%x branch on after %d us\n",
+ 			    m, s, i * 10);
+ 			return kIOReturnSuccess;
