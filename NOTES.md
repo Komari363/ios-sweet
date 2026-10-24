@@ -1,5 +1,33 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 11:05 — route10: M_TX_FIFO_RD_ERR on every pageSet
+
+- Route10 `output/a4.2/first-light-geni-irq/shim-boot.img`
+  (sha256 `42e3c79c...`, kernel `f2a7aa65...`, CI `40009468130`)
+  booted once at 10:58:50. The user reports touch still does not
+  respond and the console is full of `final irq error`.
+- TWRP `log ring` at 11:03 (4,198,400 B, sha256 `7c6a53fd...`,
+  parser `total 2151384 bytes, flush #20`) shows:
+  `SWEET SPI: SE18 ready proto=1 fifo=16 x 32 bits, irq=0`,
+  then every transfer is `xfer len=3` followed by
+  `final irq error len=3 irq=0x50000000 status=0x41
+  txfifo=0x0 rxfifo=0x0`. There are **23,877** such error lines.
+- `0x50000000` = bit 28 (`M_TX_FIFO_RD_ERR`) + bit 30
+  (`M_TX_FIFO_WATERMARK`). Bit 28 is in `SPI_IRQ_ERRORS`; bit 30 is
+  not. `txfifo=0` with `status=0x41` means the command started with an
+  empty TX FIFO and GENI read it before the CPU wrote the page-set
+  word. `pageSet()` therefore fails, `readData()` returns early, and
+  the NVT lines are `FWINFO read failed` / `packet read error 1..3`.
+- The same ring also shows
+  `hfs_mounthfsplus: SWEET: mounting dirty non-journaled root read-write`
+  and `hfs: Removed 12 orphaned / unlinked files and 5 directories`.
+  The A3 clean baseline from 02:28 is dirty again; route11 must not be
+  treated as a clean-HFS run.
+- Route11 patch `0086-sweet-geni-spi-fifo.patch`: prefill all but one
+  TX FIFO slot before `GENI_M_CMD0`, interleave RX draining with TX
+  filling, reject short RX, and rate-limit the IRQ error log. Not yet
+  built or booted.
+
 ## 2026-10-24 01:35 — route8 fails at GCC window; HFS+ still corrupt
 
 - Route8 (`first-light-touch-poll/shim-boot.img`, sha256 `4a8a9319...`,

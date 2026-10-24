@@ -1,0 +1,184 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+index cc9f493..8a22af7 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -96,6 +96,7 @@ SweetGeniSPI::start(IOService *provider)
+ 	fFifoWidth = 0;
+ 	fTestRuns = 0;
+ 	fXferCount = 0;
++	fIrqErrors = 0;
+ 	fPlatformWarned = false;
+ 	fPinsReady = false;
+ 	fClockReady = false;
+@@ -349,48 +350,92 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 
+ 	uint32_t opcode = (tx != NULL && rx != NULL) ? SPI_FULL_DUPLEX :
+ 	    (tx != NULL ? SPI_TX_ONLY : SPI_RX_ONLY);
+-	writeReg(GENI_M_CMD0, opcode << 27);
+-
+ 	const uint8_t *txb = (const uint8_t *)tx;
++	uint8_t *rxb = (uint8_t *)rx;
+ 	uint32_t tx_off = 0;
+-	if (txb != NULL) {
+-		uint32_t spins = 0;
+-		while (tx_off < len) {
+-			uint32_t used = readReg(GENI_TX_FIFO_STATUS) & 0x0fffffffu;
+-			uint32_t free_words = used < fFifoDepth ?
+-			    fFifoDepth - used : 0;
+-			if (free_words == 0) {
+-				if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
+-					cancelCommand();
+-					return kIOReturnTimeout;
+-				}
+-				IODelay(SPI_TIMEOUT_STEP_US);
+-				continue;
++	uint32_t rx_off = 0;
++
++	/*
++	 * Fill all but one FIFO slot before starting the command.  If M_CMD0 is
++	 * issued while the TX FIFO is empty, GENI latches M_TX_FIFO_RD_ERR
++	 * (bit 28) and aborts before the first word reaches the shifter.
++	 */
++	uint32_t prefill = fFifoDepth > 0 ? fFifoDepth - 1 : 0;
++	while (txb != NULL && tx_off < len && prefill > 0) {
++		uint32_t word = 0;
++		for (uint32_t b = 0; b < 4 && tx_off < len; b++) {
++			word |= (uint32_t)txb[tx_off++] << (8 * b);
++		}
++		writeReg(GENI_TX_FIFO, word);
++		prefill--;
++	}
++	writeReg(GENI_M_CMD0, opcode << 27);
++
++	uint32_t spins = 0;
++	while (txb != NULL && tx_off < len) {
++		uint32_t irq = readReg(GENI_M_IRQ_STATUS);
++		if (irq & SPI_IRQ_ERRORS) {
++			if (fIrqErrors++ < 4) {
++				IOLog("SWEET SPI: tx irq error len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x\n",
++				    len, irq, readReg(GENI_STATUS),
++				    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS));
++			}
++			writeReg(GENI_M_IRQ_CLEAR, irq);
++			cancelCommand();
++			return kIOReturnIOError;
++		}
++		if (irq & SPI_IRQ_DONE) {
++			break;
++		}
++		/*
++		 * Drain RX while filling TX.  A 67-byte full-duplex frame is
++		 * larger than the 64-byte RX FIFO, so waiting until all TX is
++		 * written would overflow it.
++		 */
++		while (rxb != NULL && rx_off < len) {
++			uint32_t wc = readReg(GENI_RX_FIFO_STATUS) & 0x01ffffffu;
++			if (wc == 0) {
++				break;
+ 			}
+-			spins = 0;
+-			for (uint32_t w = 0; w < free_words && tx_off < len; w++) {
+-				uint32_t word = 0;
+-				for (uint32_t b = 0; b < 4 && tx_off < len; b++) {
+-					word |= (uint32_t)txb[tx_off++] << (8 * b);
++			for (uint32_t w = 0; w < wc && rx_off < len; w++) {
++				uint32_t word = readReg(GENI_RX_FIFO);
++				for (uint32_t b = 0; b < 4 && rx_off < len; b++) {
++					rxb[rx_off++] = (uint8_t)(word >> (8 * b));
+ 				}
+-				writeReg(GENI_TX_FIFO, word);
+ 			}
+ 		}
+-		writeReg(GENI_TX_WATERMARK, 0);
++		uint32_t used = readReg(GENI_TX_FIFO_STATUS) & 0x0fffffffu;
++		uint32_t free_words = used < fFifoDepth ? fFifoDepth - used : 0;
++		if (free_words == 0) {
++			if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++				cancelCommand();
++				return kIOReturnTimeout;
++			}
++			IODelay(SPI_TIMEOUT_STEP_US);
++			continue;
++		}
++		spins = 0;
++		for (uint32_t w = 0; w < free_words && tx_off < len; w++) {
++			uint32_t word = 0;
++			for (uint32_t b = 0; b < 4 && tx_off < len; b++) {
++				word |= (uint32_t)txb[tx_off++] << (8 * b);
++			}
++			writeReg(GENI_TX_FIFO, word);
++		}
+ 	}
++	writeReg(GENI_TX_WATERMARK, 0);
+ 
+-	uint8_t *rxb = (uint8_t *)rx;
+-	uint32_t rx_off = 0;
+-	uint32_t spins = 0;
++	spins = 0;
+ 	while (rxb != NULL && rx_off < len) {
+-		uint32_t status = readReg(GENI_RX_FIFO_STATUS);
+-		uint32_t wc = status & 0x01ffffffu;
++		uint32_t wc = readReg(GENI_RX_FIFO_STATUS) & 0x01ffffffu;
+ 		if (wc == 0) {
+ 			uint32_t irq = readReg(GENI_M_IRQ_STATUS);
+ 			if (irq & SPI_IRQ_ERRORS) {
+-				IOLog("SWEET SPI: rx irq error len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x\n",
+-				    len, irq, readReg(GENI_STATUS),
+-				    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS));
++				if (fIrqErrors++ < 4) {
++					IOLog("SWEET SPI: rx irq error len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x\n",
++					    len, irq, readReg(GENI_STATUS),
++					    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS));
++				}
+ 				writeReg(GENI_M_IRQ_CLEAR, irq);
+ 				cancelCommand();
+ 				return kIOReturnIOError;
+@@ -419,9 +464,11 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	for (;;) {
+ 		irq = readReg(GENI_M_IRQ_STATUS);
+ 		if (irq & SPI_IRQ_ERRORS) {
+-			IOLog("SWEET SPI: final irq error len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x\n",
+-			    len, irq, readReg(GENI_STATUS),
+-			    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS));
++			if (fIrqErrors++ < 4) {
++				IOLog("SWEET SPI: final irq error len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x\n",
++				    len, irq, readReg(GENI_STATUS),
++				    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS));
++			}
+ 			writeReg(GENI_M_IRQ_CLEAR, irq);
+ 			cancelCommand();
+ 			return kIOReturnIOError;
+@@ -430,10 +477,6 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 			break;
+ 		}
+ 		if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
+-			IOLog("SWEET SPI: timeout len=%u irq=0x%x status=0x%x txfifo=0x%x rxfifo=0x%x en=0x%x\n",
+-			    len, irq, readReg(GENI_STATUS),
+-			    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_RX_FIFO_STATUS),
+-			    readReg(GENI_M_IRQ_EN));
+ 			cancelCommand();
+ 			return kIOReturnTimeout;
+ 		}
+@@ -441,6 +484,10 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	}
+ 	writeReg(GENI_M_IRQ_CLEAR, irq);
+ 	writeReg(GENI_TX_WATERMARK, 0);
++	if (rxb != NULL && rx_off != len) {
++		IOLog("SWEET SPI: short rx len=%u got=%u\n", len, rx_off);
++		return kIOReturnIOError;
++	}
+ 	return kIOReturnSuccess;
+ }
+ 
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
+index 8961c15..d7cb4d5 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.h
++++ b/iokit/Kernel/arm/SweetGeniSPI.h
+@@ -50,6 +50,7 @@ private:
+ 	uint32_t fFifoWidth;
+ 	uint32_t fTestRuns;
+ 	uint32_t fXferCount;
++	uint32_t fIrqErrors;
+ 	bool fPlatformWarned;
+ 	bool fPinsReady;
+ 	bool fClockReady;
