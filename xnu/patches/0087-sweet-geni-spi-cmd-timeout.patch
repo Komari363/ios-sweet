@@ -1,0 +1,103 @@
+﻿diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+index 8a22af7..3b474a3 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -19,6 +19,8 @@
+ #include <IOKit/IOMapTypes.h>
+ #include <pexpert/pexpert.h>
+ 
++static uint32_t gSpiTimeoutLogs = 0;
++
+ #define SPI_SE_BASE             0x00c84000u
+ 
+ #define GENI_SER_M_CLK_CFG      0x048u
+@@ -327,6 +329,13 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	if (!configurePins(true) || !configureClock()) {
+ 		return kIOReturnNotReady;
+ 	}
++	if (fXferCount == 0) {
++		IOLog("SWEET SPI: pre status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
++		    readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
++		    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
++		    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
++		    readReg(GENI_RX_FIFO_STATUS));
++	}
+ 	if (fXferCount++ < 8) {
+ 		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
+ 		    len, cs, hz, fFifoDepth, fFifoWidth);
+@@ -346,7 +355,6 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	uint32_t words = (len * 8u) / bpw;
+ 	writeReg(SPI_TX_TRANS_LEN, tx != NULL ? words : 0);
+ 	writeReg(SPI_RX_TRANS_LEN, rx != NULL ? words : 0);
+-	writeReg(GENI_TX_WATERMARK, 1);
+ 
+ 	uint32_t opcode = (tx != NULL && rx != NULL) ? SPI_FULL_DUPLEX :
+ 	    (tx != NULL ? SPI_TX_ONLY : SPI_RX_ONLY);
+@@ -356,10 +364,14 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	uint32_t rx_off = 0;
+ 
+ 	/*
+-	 * Fill all but one FIFO slot before starting the command.  If M_CMD0 is
+-	 * issued while the TX FIFO is empty, GENI latches M_TX_FIFO_RD_ERR
+-	 * (bit 28) and aborts before the first word reaches the shifter.
++	 * Start the command first, then fill the TX FIFO immediately without
++	 * reading any status registers in between.  Reading TX_FIFO_STATUS
++	 * after M_CMD0 gives the sequencer enough time to observe an empty FIFO
++	 * and latch M_TX_FIFO_RD_ERR before the first word is written.
+ 	 */
++	writeReg(GENI_M_CMD0, opcode << 27);
++	writeReg(GENI_TX_WATERMARK, 1);
++
+ 	uint32_t prefill = fFifoDepth > 0 ? fFifoDepth - 1 : 0;
+ 	while (txb != NULL && tx_off < len && prefill > 0) {
+ 		uint32_t word = 0;
+@@ -369,7 +381,6 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 		writeReg(GENI_TX_FIFO, word);
+ 		prefill--;
+ 	}
+-	writeReg(GENI_M_CMD0, opcode << 27);
+ 
+ 	uint32_t spins = 0;
+ 	while (txb != NULL && tx_off < len) {
+@@ -408,6 +419,13 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 		uint32_t free_words = used < fFifoDepth ? fFifoDepth - used : 0;
+ 		if (free_words == 0) {
+ 			if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++				if (gSpiTimeoutLogs++ < 4) {
++					IOLog("SWEET SPI: tx timeout len=%u status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
++					    len, readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
++					    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
++					    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
++					    readReg(GENI_RX_FIFO_STATUS));
++				}
+ 				cancelCommand();
+ 				return kIOReturnTimeout;
+ 			}
+@@ -444,6 +462,13 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 				break;
+ 			}
+ 			if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++				if (gSpiTimeoutLogs++ < 4) {
++					IOLog("SWEET SPI: rx timeout len=%u status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
++					    len, readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
++					    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
++					    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
++					    readReg(GENI_RX_FIFO_STATUS));
++				}
+ 				cancelCommand();
+ 				return kIOReturnTimeout;
+ 			}
+@@ -477,6 +502,13 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 			break;
+ 		}
+ 		if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
++			if (gSpiTimeoutLogs++ < 4) {
++				IOLog("SWEET SPI: cmd timeout len=%u status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
++				    len, readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
++				    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
++				    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
++				    readReg(GENI_RX_FIFO_STATUS));
++			}
+ 			cancelCommand();
+ 			return kIOReturnTimeout;
+ 		}
