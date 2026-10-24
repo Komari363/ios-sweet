@@ -1,5 +1,50 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 15:31 — route14: SE18 root was off, but command still never completes
+
+- Human was already at fastboot; route14 image
+  `output/a4.2/first-light-geni-root/shim-boot.img`
+  (sha256 `b2bfb430...`, kernel `5be66c60...`, CI `40073097396`)
+  booted once at 15:21:28.  It reached an activation page (user report,
+  no photo), but touch still did not respond.
+- TWRP was booted at 15:29 only to read the ring and returned to
+  fastboot at 15:32.  No partition was written.
+- Ring: 4,198,400 B, sha256
+  `73fc46f1fb61bcf20eaa5270cd5e8b043d8ff58e60df9d231534d478e5710bc4`;
+  parser `# version 1, ring 4194304, total 286118 bytes, flush #46`;
+  text 289,544 B, sha256 `6740e7d1...`.
+- `GCC_QUPV3_WRAP2_S1` root before:
+  `cmd=0x80000000 cfg=0x100000 dfs=0x21 branch=0x0 halt=0x80004220`.
+  Route14 logged `DFS enabled; clearing for direct RCG`, then
+  `after cmd=0x2 cfg=0x1 dfs=0x20`, then `branch on after 10 us`.
+  The root clock is therefore no longer the missing piece.
+- `SE init` still read back correctly (`fw=0x100 if=0x0 cgc=0x7f
+  out=0x7f force=0x0 gran=0x0`; packing all four match).  But the first
+  3-byte transfer still reports:
+  `cmd timeout len=3 status=0x31 irq=0x40000000 en=0x3300000f
+  ctrl=0x0 mcmd=0x8000000 txfifo=0x0 rxfifo=0x0`.
+  `M_CMD_DONE` never asserts.  Later transfers show
+  `irq=0x40000002 status=0x31` (CANCEL/ABORT bits), so
+  `cancelCommand()` also leaves the SE wedged.
+- This is `sweet-touch-spi-cmd` failure **2/3**, not exhaustion.  No
+  route15 was started.
+- HFS is worse than route13: `BlockMarkFreeInternal`,
+  `error truncating data fork!`, and `Removed 19 orphaned files and 6
+  directories`.  The activation page is not a clean UI datapoint.  A3
+  must be reflashed before the next UI-sensitive boot; the SPI failure
+  itself is still valid from the ring.
+- Candidate only, not implemented: compare the TX watermark lifetime
+  with Linux.  Linux starts the command, then writes
+  `SE_GENI_TX_WATERMARK_REG = tx_wm` (`spi-geni-qcom.c:1175`,
+  `:1190-1193`), and clears it only after all TX bytes are written
+  (`:1454-1455`).  The current xnu path clears `GENI_TX_WATERMARK`
+  immediately after `M_CMD0`.  A route15 register-readback experiment
+  should log `GENI_M_CMD_CTRL`, `GENI_STATUS`, and
+  `SE_GENI_TX_WATERMARK` around each step.
+- Evidence: `evidence/a5/20261024T153100-route14-result/`.
+- Device after ring: fastboot, active_slot=a, no token, no partition
+  write.
+
 ## 2026-10-24 14:58 — route13 boot fails: SE init readback correct, command never completes
 
 - Human reached fastboot at 14:22:44; route13 image
