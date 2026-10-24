@@ -1,0 +1,240 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -51,11 +51,37 @@
+ #define GENI_TX_FIFO_STATUS     0x800u
+ #define GENI_RX_FIFO_STATUS     0x804u
+ #define GENI_TX_WATERMARK       0x80cu
++#define GENI_RX_WATERMARK       0x810u
++#define GENI_RX_RFR_WATERMARK   0x814u
+ #define GENI_HW_PARAM_0         0xe24u
++#define GENI_HW_PARAM_1         0xe28u
++
++#define GENI_FORCE_DEFAULT_REG  0x020u
++#define GENI_OUTPUT_CTRL        0x024u
++#define GENI_CGC_CTRL           0x028u
++#define GENI_BYTE_GRAN          0x254u
++#define GENI_TX_PACKING_CFG0    0x260u
++#define GENI_TX_PACKING_CFG1    0x264u
++#define GENI_RX_PACKING_CFG0    0x284u
++#define GENI_RX_PACKING_CFG1    0x288u
++#define GENI_GSI_EVENT_EN       0xe18u
++#define GENI_IRQ_EN             0xe1cu
++#define GENI_DMA_GENERAL_CFG    0xe30u
++
++#define SPI_S_IRQ_EN            0x644u
++#define GENI_S_IRQ_CLEAR        0x648u
+ 
+ #define SPI_FULL_DUPLEX         3u
+ #define SPI_TX_ONLY             1u
+ #define SPI_RX_ONLY             2u
++
++/*
++ * geni_se_config_packing(8, 4, true): four 8-bit words per 32-bit
++ * FIFO entry, MSB first on the wire, LSB byte first in the FIFO.
++ * Values match the verified SE7 I2C path on this SoC.
++ */
++#define SPI_PACK0               0x0007f8feu
++#define SPI_PACK1               0x000ffefeu
+ 
+ #define SPI_IRQ_DONE            (1u << 0)
+ #define SPI_IRQ_ERRORS          ((1u << 1) | (1u << 2) | (1u << 3) | \
+@@ -96,12 +122,15 @@
+ 	fGCCService = NULL;
+ 	fFifoDepth = 0;
+ 	fFifoWidth = 0;
++	fRxDepth = 0;
++	fRxWidth = 0;
+ 	fTestRuns = 0;
+ 	fXferCount = 0;
+ 	fIrqErrors = 0;
+ 	fPlatformWarned = false;
+ 	fPinsReady = false;
+ 	fClockReady = false;
++	fSEReady = false;
+ 	if (!IOService::start(provider)) {
+ 		return false;
+ 	}
+@@ -118,18 +147,27 @@
+ 		return false;
+ 	}
+ 	uint32_t hw = spi_read(fBase, GENI_HW_PARAM_0);
++	uint32_t hw1 = spi_read(fBase, GENI_HW_PARAM_1);
+ 	fFifoDepth = (hw >> 16) & 0x3f;
+ 	fFifoWidth = (hw >> 24) & 0x3f;
++	fRxDepth = (hw1 >> 16) & 0x3f;
++	fRxWidth = (hw1 >> 24) & 0x3f;
+ 	if (fFifoDepth == 0) {
+ 		fFifoDepth = 16;
+ 	}
+ 	if (fFifoWidth == 0) {
+ 		fFifoWidth = 32;
+ 	}
++	if (fRxDepth == 0) {
++		fRxDepth = fFifoDepth;
++	}
++	if (fRxWidth == 0) {
++		fRxWidth = fFifoWidth;
++	}
+ 	uint32_t proto = (spi_read(fBase, GENI_FW_REVISION) >> 8) & 0xff;
+ 	registerService();
+-	IOLog("SWEET SPI: SE18 ready proto=%u fifo=%u x %u bits, irq=%u\n",
+-	    proto, fFifoDepth, fFifoWidth,
++	IOLog("SWEET SPI: SE18 ready proto=%u tx=%u x %u rx=%u x %u irq=%u\n",
++	    proto, fFifoDepth, fFifoWidth, fRxDepth, fRxWidth,
+ 	    spi_read(fBase, GENI_M_IRQ_STATUS));
+ 	int selftest = 0;
+ 	if (PE_parse_boot_argn("sweetspitest", &selftest, sizeof(selftest)) &&
+@@ -282,6 +320,85 @@
+ 	return true;
+ }
+ 
++/*
++ * Mirror geni_se_init()/se_io_init()/se_io_set_mode() for a polled FIFO
++ * engine, plus the 8-bit packing used by the working SE7 I2C driver.
++ * Without this the sequencer inherits ABL's setup: packing is not four
++ * bytes per FIFO entry, byte granularity is not selected, and the GENI
++ * core is not forced to its default IO/output state.
++ *
++ * SE_IRQ_EN is deliberately cleared: this driver polls the local
++ * M_IRQ_STATUS and the SE18 GIC SPI is not wired during bring-up.
++ */
++bool
++SweetGeniSPI::configureSE()
++{
++	if (fSEReady) {
++		return true;
++	}
++	if (fBase == NULL) {
++		return false;
++	}
++	if (readReg(GENI_IF_FIFO_DISABLE) & 1u) {
++		IOLog("SWEET SPI: SE18 FIFO interface disabled (GSI mode)\n");
++		return false;
++	}
++	for (uint32_t i = 0; i < 100; i++) {
++		if (!(readReg(GENI_STATUS) & 1u)) {
++			break;
++		}
++		IODelay(10);
++	}
++	if (readReg(GENI_STATUS) & 1u) {
++		IOLog("SWEET SPI: SE18 command still active status=0x%x\n",
++		    readReg(GENI_STATUS));
++		return false;
++	}
++
++	writeReg(GENI_GSI_EVENT_EN, 0);
++	writeReg(GENI_IRQ_EN, 0);              /* no external GIC routing */
++	writeReg(SPI_S_IRQ_EN, 0);
++	writeReg(GENI_S_IRQ_CLEAR, 0xffffffffu);
++	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
++	writeReg(GENI_DMA_MODE_EN, 0);         /* FIFO mode */
++	writeReg(GENI_CGC_CTRL, readReg(GENI_CGC_CTRL) | 0x7fu);
++	writeReg(GENI_DMA_GENERAL_CFG,
++	    readReg(GENI_DMA_GENERAL_CFG) | 0x0fu);
++	writeReg(GENI_OUTPUT_CTRL, 0x7fu);
++	writeReg(GENI_FORCE_DEFAULT_REG, 1);
++	writeReg(GENI_BYTE_GRAN, 0);
++	writeReg(GENI_TX_PACKING_CFG0, SPI_PACK0);
++	writeReg(GENI_TX_PACKING_CFG1, SPI_PACK1);
++	writeReg(GENI_RX_PACKING_CFG0, SPI_PACK0);
++	writeReg(GENI_RX_PACKING_CFG1, SPI_PACK1);
++	writeReg(GENI_RX_WATERMARK, 0);
++	writeReg(GENI_RX_RFR_WATERMARK,
++	    fRxDepth > 2 ? fRxDepth - 2 : 0);
++	writeReg(GENI_TX_WATERMARK, 0);
++
++	IOLog("SWEET SPI: SE init fw=0x%x if=0x%x cgc=0x%x out=0x%x force=0x%x gran=0x%x\n",
++	    readReg(GENI_FW_REVISION), readReg(GENI_IF_FIFO_DISABLE),
++	    readReg(GENI_CGC_CTRL), readReg(GENI_OUTPUT_CTRL),
++	    readReg(GENI_FORCE_DEFAULT_REG), readReg(GENI_BYTE_GRAN));
++	IOLog("SWEET SPI: SE init pack=0x%x/0x%x/0x%x/0x%x irqen=0x%x gsi=0x%x s_irq=0x%x rxwm=%u/%u status=0x%x\n",
++	    readReg(GENI_TX_PACKING_CFG0), readReg(GENI_TX_PACKING_CFG1),
++	    readReg(GENI_RX_PACKING_CFG0), readReg(GENI_RX_PACKING_CFG1),
++	    readReg(GENI_IRQ_EN), readReg(GENI_GSI_EVENT_EN),
++	    readReg(SPI_S_IRQ_EN), readReg(GENI_RX_WATERMARK),
++	    readReg(GENI_RX_RFR_WATERMARK), readReg(GENI_STATUS));
++
++	if (readReg(GENI_TX_PACKING_CFG0) != SPI_PACK0 ||
++	    readReg(GENI_TX_PACKING_CFG1) != SPI_PACK1 ||
++	    readReg(GENI_RX_PACKING_CFG0) != SPI_PACK0 ||
++	    readReg(GENI_RX_PACKING_CFG1) != SPI_PACK1 ||
++	    readReg(GENI_BYTE_GRAN) != 0) {
++		IOLog("SWEET SPI: SE18 packing readback mismatch\n");
++		return false;
++	}
++	fSEReady = true;
++	return true;
++}
++
+ void
+ SweetGeniSPI::cancelCommand()
+ {
+@@ -326,7 +443,7 @@
+ 	if (tx == NULL && rx == NULL) {
+ 		return kIOReturnBadArgument;
+ 	}
+-	if (!configurePins(true) || !configureClock()) {
++	if (!configurePins(true) || !configureClock() || !configureSE()) {
+ 		return kIOReturnNotReady;
+ 	}
+ 	if (fXferCount == 0) {
+@@ -364,14 +481,13 @@
+ 	uint32_t rx_off = 0;
+ 
+ 	/*
+-	 * Start the command first, then fill the TX FIFO immediately without
+-	 * reading any status registers in between.  Reading TX_FIFO_STATUS
+-	 * after M_CMD0 gives the sequencer enough time to observe an empty FIFO
+-	 * and latch M_TX_FIFO_RD_ERR before the first word is written.
++	 * Fill all but one FIFO slot before starting the command.  If M_CMD0
++	 * is issued while the TX FIFO is empty, GENI latches
++	 * M_TX_FIFO_RD_ERR (bit 28) and aborts before the first word reaches
++	 * the shifter.  Route11 showed this removes the error, so route13
++	 * keeps the prefill order and adds the missing SE initialization.
+ 	 */
+-	writeReg(GENI_M_CMD0, opcode << 27);
+ 	writeReg(GENI_TX_WATERMARK, 1);
+-
+ 	uint32_t prefill = fFifoDepth > 0 ? fFifoDepth - 1 : 0;
+ 	while (txb != NULL && tx_off < len && prefill > 0) {
+ 		uint32_t word = 0;
+@@ -381,6 +497,8 @@
+ 		writeReg(GENI_TX_FIFO, word);
+ 		prefill--;
+ 	}
++	writeReg(GENI_M_CMD0, opcode << 27);
++	writeReg(GENI_TX_WATERMARK, 0);
+ 
+ 	uint32_t spins = 0;
+ 	while (txb != NULL && tx_off < len) {
+
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.h b/iokit/Kernel/arm/SweetGeniSPI.h
+--- a/iokit/Kernel/arm/SweetGeniSPI.h
++++ b/iokit/Kernel/arm/SweetGeniSPI.h
+@@ -35,6 +35,7 @@
+ 	bool lookupPlatform();
+ 	bool configureClock();
+ 	bool configurePins(bool active);
++	bool configureSE();
+ 	void cancelCommand();
+ 	IOReturn transferLocked(const void *tx, void *rx, UInt32 len,
+ 	    UInt32 hz, UInt8 cs, UInt8 mode, UInt8 bpw);
+@@ -48,12 +49,15 @@
+ 	IOService *fGCCService;
+ 	uint32_t fFifoDepth;
+ 	uint32_t fFifoWidth;
++	uint32_t fRxDepth;
++	uint32_t fRxWidth;
+ 	uint32_t fTestRuns;
+ 	uint32_t fXferCount;
+ 	uint32_t fIrqErrors;
+ 	bool fPlatformWarned;
+ 	bool fPinsReady;
+ 	bool fClockReady;
++	bool fSEReady;
+ };
+ 
+ #endif /* _SWEET_GENI_SPI_H */
+
