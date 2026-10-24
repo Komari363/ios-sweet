@@ -1,5 +1,40 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 02:47 — sweetboot probe: normal reboot path, host n=0
+
+- Patch `0096-sweet-boot-probe.patch` (`ac1946c`) adds a `sweetboot`
+  boot-arg probe in `sweet_ufs_init()` after `SWEET UFS` and the 0095
+  panic probe, before HFS+ mount.  It installs a temporary
+  `PE_halt_restart` PSCI reset hook and calls
+  `reboot_kernel(RB_QUICK | RB_NOSYNC, NULL)`; normal boots do not set
+  the hook.
+- CI `40121596254` **success**, head `ac1946c`.  Kernel
+  `output/a4.2/ci-40121596254/kernel.development.sweet`, 17,274,720 B,
+  sha256 `82f32b05...`; image
+  `output/a4.2/first-light-sweetboot/shim-boot.img`, 16,871,424 B,
+  sha256 `7798347924806c3457151e967e43c119f6832fdd23f9e2d312b521120cec8069`.
+  CMDLINE has `sweetboot=1 ufsrw=0 rootrw=0 sweetlog=0`.
+- 02:47:20 `probe slot`=a (fastboot-getvar, `9e34edec`); booted once at
+  02:47:21.819; BOOT_END 02:47:23.079 rc=0 (0.814 s).  `devices` was
+  empty at 02:47:25/28/38/54 (T+2/5/15/30).
+- Host alone cannot distinguish: (a) reset worked and ABL retried the
+  same one-shot image, (b) ABL booted Android or stayed off, (c)
+  `reboot_kernel` did not reach PSCI and is stuck at `MACH Reboot`.
+  Screen confirmation is required before attribution.  Do not boot again.
+- **Result (02:49):** user reports the experiment succeeded; ABL booted
+  slot a's boot image.  `probe slot` at 02:49:34 via adb-property returned
+  `a`; the device is in Android; fastboot was empty at T+2/5/15/30 and
+  02:49:16.  So the temporary `PE_halt_restart` hook +
+  `reboot_kernel(RB_QUICK | RB_NOSYNC)` did reset, the one-shot image was
+  not retried, and ABL defaulted to active_slot=a Android.  **Reset alone
+  cannot auto-return fastboot**; `misc` boot-fastboot or a manual key is
+  required.
+- No partition write, no HFS+ mount, no token.  `probe boot-hash` is
+  refused in fastboot because it needs TWRP adb, so boot hashes were not
+  refreshed this round; only `probe slot=a` at 02:47:20.
+- Evidence: `evidence/a5/20261025T024655-sweetboot-build/`,
+  `evidence/a5/20261025T024720-sweetboot-boot/`.
+
 ## 2026-10-24 18:20 — panic-routing: no fastboot; earlier retry reading retracted
 
 - Probe `0095-sweet-panic-probe.patch` (`8cd6eb7`, CI `40083963406`
