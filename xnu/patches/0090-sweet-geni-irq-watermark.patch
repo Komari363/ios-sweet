@@ -1,0 +1,103 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+index 8cf2350..4f6a922 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -71,6 +71,22 @@ static uint32_t gSpiTimeoutLogs = 0;
+ #define SPI_S_IRQ_EN            0x644u
+ #define GENI_S_IRQ_CLEAR        0x648u
+ 
++/*
++ * SE_IRQ_EN (0xe1c) is the wrapper-level enable for the GENI/DMA interrupt
++ * lines.  geni_se_io_set_mode() sets all four bits after geni_se_irq_clear()
++ * has zeroed the register; route13/14 zeroed it and never restored it.
++ */
++#define GENI_DMA_TX_IRQ_EN      (1u << 0)
++#define GENI_DMA_RX_IRQ_EN      (1u << 1)
++#define GENI_M_IRQ_EN_BIT       (1u << 2)
++#define GENI_S_IRQ_EN_BIT       (1u << 3)
++#define GENI_SE_IRQ_EN_MASK     (GENI_DMA_TX_IRQ_EN | GENI_DMA_RX_IRQ_EN | \
++                                 GENI_M_IRQ_EN_BIT | GENI_S_IRQ_EN_BIT)
++
++#define M_TX_FIFO_WATERMARK_EN  (1u << 30)
++#define M_RX_FIFO_WATERMARK_EN  (1u << 26)
++#define M_RX_FIFO_LAST_EN       (1u << 27)
++
+ #define SPI_FULL_DUPLEX         3u
+ #define SPI_TX_ONLY             1u
+ #define SPI_RX_ONLY             2u
+@@ -375,17 +391,20 @@ SweetGeniSPI::configureSE()
+ 	writeReg(GENI_RX_RFR_WATERMARK,
+ 	    fRxDepth > 2 ? fRxDepth - 2 : 0);
+ 	writeReg(GENI_TX_WATERMARK, 0);
++	/* geni_se_io_set_mode(): keep the GENI/DMA interrupt lines enabled. */
++	writeReg(GENI_IRQ_EN, GENI_SE_IRQ_EN_MASK);
+ 
+ 	IOLog("SWEET SPI: SE init fw=0x%x if=0x%x cgc=0x%x out=0x%x force=0x%x gran=0x%x\n",
+ 	    readReg(GENI_FW_REVISION), readReg(GENI_IF_FIFO_DISABLE),
+ 	    readReg(GENI_CGC_CTRL), readReg(GENI_OUTPUT_CTRL),
+ 	    readReg(GENI_FORCE_DEFAULT_REG), readReg(GENI_BYTE_GRAN));
+-	IOLog("SWEET SPI: SE init pack=0x%x/0x%x/0x%x/0x%x irqen=0x%x gsi=0x%x s_irq=0x%x rxwm=%u/%u status=0x%x\n",
++	IOLog("SWEET SPI: SE init pack=0x%x/0x%x/0x%x/0x%x irqen=0x%x serirq=0x%x gsi=0x%x s_irq=0x%x rxwm=%u/%u status=0x%x\n",
+ 	    readReg(GENI_TX_PACKING_CFG0), readReg(GENI_TX_PACKING_CFG1),
+ 	    readReg(GENI_RX_PACKING_CFG0), readReg(GENI_RX_PACKING_CFG1),
+-	    readReg(GENI_IRQ_EN), readReg(GENI_GSI_EVENT_EN),
+-	    readReg(SPI_S_IRQ_EN), readReg(GENI_RX_WATERMARK),
+-	    readReg(GENI_RX_RFR_WATERMARK), readReg(GENI_STATUS));
++	    readReg(GENI_M_IRQ_EN), readReg(GENI_IRQ_EN),
++	    readReg(GENI_GSI_EVENT_EN), readReg(SPI_S_IRQ_EN),
++	    readReg(GENI_RX_WATERMARK), readReg(GENI_RX_RFR_WATERMARK),
++	    readReg(GENI_STATUS));
+ 
+ 	if (readReg(GENI_TX_PACKING_CFG0) != SPI_PACK0 ||
+ 	    readReg(GENI_TX_PACKING_CFG1) != SPI_PACK1 ||
+@@ -402,6 +421,7 @@ SweetGeniSPI::configureSE()
+ void
+ SweetGeniSPI::cancelCommand()
+ {
++	writeReg(GENI_TX_WATERMARK, 0);
+ 	writeReg(GENI_M_CMD_CTRL, SPI_CMD_CANCEL);
+ 	for (uint32_t i = 0; i < 100; i++) {
+ 		if (!(readReg(GENI_STATUS) & 1u)) {
+@@ -452,12 +472,17 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 		    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
+ 		    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
+ 		    readReg(GENI_RX_FIFO_STATUS));
++		IOLog("SWEET SPI: pre2 clksel=0x%x clkcfg=0x%x se_irq=0x%x mirq=0x%x twm=0x%x\n",
++		    readReg(GENI_CLK_SEL), readReg(GENI_SER_M_CLK_CFG),
++		    readReg(GENI_IRQ_EN), readReg(GENI_M_IRQ_EN),
++		    readReg(GENI_TX_WATERMARK));
+ 	}
+ 	if (fXferCount++ < 8) {
+ 		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
+ 		    len, cs, hz, fFifoDepth, fFifoWidth);
+ 	}
+-	writeReg(GENI_M_IRQ_EN, SPI_IRQ_DONE | SPI_IRQ_ERRORS);
++	writeReg(GENI_M_IRQ_EN, SPI_IRQ_DONE | SPI_IRQ_ERRORS |
++	    M_TX_FIFO_WATERMARK_EN | M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
+ 	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
+ 	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
+ 	writeReg(SPI_CPHA, 0);
+@@ -498,7 +523,13 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 		prefill--;
+ 	}
+ 	writeReg(GENI_M_CMD0, opcode << 27);
+-	writeReg(GENI_TX_WATERMARK, 0);
++	/*
++	 * Keep TX_WATERMARK asserted until the transfer completes.  The
++	 * Linux FIFO path sets tx_wm immediately after M_CMD0 and only
++	 * writes 0 in geni_spi_handle_tx() after the last byte, or in
++	 * handle_fifo_timeout().  Route13/14 cleared it right after the
++	 * command and the sequencer never raised M_CMD_DONE.
++	 */
+ 
+ 	uint32_t spins = 0;
+ 	while (txb != NULL && tx_off < len) {
+@@ -559,7 +590,7 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 			writeReg(GENI_TX_FIFO, word);
+ 		}
+ 	}
+-	writeReg(GENI_TX_WATERMARK, 0);
++	/* TX_WATERMARK stays asserted until the final M_CMD_DONE. */
+ 
+ 	spins = 0;
+ 	while (rxb != NULL && rx_off < len) {
