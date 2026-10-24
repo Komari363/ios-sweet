@@ -1,0 +1,21 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -654,6 +654,18 @@
+ 	printf("SWEET UFS: \"%s\" on LUN %u: first block 0x%llx, %llu MiB, %s, DMA at 0x%llx\n",
+ 	    want, su.lun, su.first_block, su.nblocks * UFS_BLOCK >> 20,
+ 	    su.writable ? "read-write" : "read-only", su.dma_pa);
++	/*
++	 * Diagnostic-only ABL routing probe.  Panic before HFS+ mount and before
++	 * the persistent log thread starts, so this writes nothing to iosroot.
++	 * The panic reason is visible on the framebuffer.
++	 */
++	int sweetpanic = 0;
++	if (PE_parse_boot_argn("sweetpanic", &sweetpanic, sizeof(sweetpanic)) &&
++	    sweetpanic != 0) {
++		printf("SWEET PANIC PROBE: sweetpanic=%d, panicking before root mount\n",
++		    sweetpanic);
++		panic("SWEET-PANIC-PROBE");
++	}
+ 	sweet_log_start();
+ 	sweet_sample_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
