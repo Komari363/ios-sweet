@@ -1,0 +1,66 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -506,30 +506,26 @@
+ 	uint32_t rx_off = 0;
+ 
+ 	/*
+-	 * Fill all but one FIFO slot before starting the command.  If M_CMD0
+-	 * is issued while the TX FIFO is empty, GENI latches
+-	 * M_TX_FIFO_RD_ERR (bit 28) and aborts before the first word reaches
+-	 * the shifter.  Route11 showed this removes the error, so route13
+-	 * keeps the prefill order and adds the missing SE initialization.
++	 * Follow Linux exactly: start M_CMD0, then write TX_WATERMARK, then
++	 * fill the FIFO.  Route15 asserted TWM before M_CMD0 and still never
++	 * saw M_CMD_DONE; route12 started the command with an empty FIFO and
++	 * latched M_TX_FIFO_RD_ERR.  This ordering is the remaining difference
++	 * between the two experiments.
+ 	 */
+-	writeReg(GENI_TX_WATERMARK, 1);
+-	uint32_t prefill = fFifoDepth > 0 ? fFifoDepth - 1 : 0;
+-	while (txb != NULL && tx_off < len && prefill > 0) {
+-		uint32_t word = 0;
+-		for (uint32_t b = 0; b < 4 && tx_off < len; b++) {
+-			word |= (uint32_t)txb[tx_off++] << (8 * b);
+-		}
+-		writeReg(GENI_TX_FIFO, word);
+-		prefill--;
+-	}
+ 	writeReg(GENI_M_CMD0, opcode << 27);
+-	/*
+-	 * Keep TX_WATERMARK asserted until the transfer completes.  The
+-	 * Linux FIFO path sets tx_wm immediately after M_CMD0 and only
+-	 * writes 0 in geni_spi_handle_tx() after the last byte, or in
+-	 * handle_fifo_timeout().  Route13/14 cleared it right after the
+-	 * command and the sequencer never raised M_CMD_DONE.
+-	 */
++	if (fXferCount == 1) {
++		IOLog("SWEET SPI: cmd start mcmd=0x%x status=0x%x txfifo=0x%x twm=0x%x\n",
++		    readReg(GENI_M_CMD0), readReg(GENI_STATUS),
++		    readReg(GENI_TX_FIFO_STATUS), readReg(GENI_TX_WATERMARK));
++	}
++	if (txb != NULL) {
++		writeReg(GENI_TX_WATERMARK, 1);
++		if (fXferCount == 1) {
++			IOLog("SWEET SPI: twm on status=0x%x txfifo=0x%x twm=0x%x\n",
++			    readReg(GENI_STATUS), readReg(GENI_TX_FIFO_STATUS),
++			    readReg(GENI_TX_WATERMARK));
++		}
++	}
+ 
+ 	uint32_t spins = 0;
+ 	while (txb != NULL && tx_off < len) {
+@@ -652,11 +648,11 @@
+ 		}
+ 		if (++spins > SPI_TIMEOUT_US / SPI_TIMEOUT_STEP_US) {
+ 			if (gSpiTimeoutLogs++ < 4) {
+-				IOLog("SWEET SPI: cmd timeout len=%u status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
++				IOLog("SWEET SPI: cmd timeout len=%u status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x twm=0x%x\n",
+ 				    len, readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
+ 				    readReg(GENI_M_IRQ_EN), readReg(GENI_M_CMD_CTRL),
+ 				    readReg(GENI_M_CMD0), readReg(GENI_TX_FIFO_STATUS),
+-				    readReg(GENI_RX_FIFO_STATUS));
++				    readReg(GENI_RX_FIFO_STATUS), readReg(GENI_TX_WATERMARK));
+ 			}
+ 			cancelCommand();
+ 			return kIOReturnTimeout;
