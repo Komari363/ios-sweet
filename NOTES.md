@@ -1,5 +1,39 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 12:20 — route11/route12 fail; `sweet-touch-spi-cmd` 3/3 exhausted
+
+- Route11 (`0086`, `5261df8`, CI `40057441034`, image
+  `output/a4.2/first-light-geni-fifo/shim-boot.img`, sha256
+  `61295ec3...`) booted at 11:23:44 and reached the lock screen, but the
+  user confirmed touch still did not respond. Console had no
+  `final irq error`, only `xfer len=3` + `packet read error 1..3`;
+  `pageSet()` still failed and route11 removed the timeout logs.
+- Route12 (`0087`, `dcd7f75`, CI `40059420411`, image
+  `output/a4.2/first-light-geni-cmd/shim-boot.img`, sha256
+  `b1d1e28d...`) booted at 12:09:43 and reached the lock screen; user
+  confirmed touch again did not respond at 12:20. Console still shows
+  four `final irq error len=3 irq=0x50000000 status=0x41 txfifo=0x0
+  rxfifo=0x0` lines, **no `cmd timeout`**, and no `xfer len=41/66`,
+  `SWEET NVT: fw=` or `packets`. `pageSet()` is still failing.
+- This is route10/11/12 consecutive failure without crossing `pageSet`:
+  `sweet-touch-spi-cmd` is **3/3 exhausted**. Per AGENTS 4.1, stop the
+  line, do not boot a new image, and wait for the human to reset STATE
+  and choose the next generation.
+- Candidate only, not implemented: route10/11/12 all changed only
+  `M_CMD0`/FIFO ordering. Linux `spi-geni-qcom.c:937` calls
+  `geni_se_init(base, 0, tx_fifo_depth - 2)` before the first transfer;
+  `SweetGeniSPI::transferLocked()` has no matching SE init/packing step.
+  Next generation should inspect/add `SE_GENI` init and
+  `GENI_FW_REVISION`/`SE_GENI_*` state, not tweak FIFO ordering again.
+- Evidence: `evidence/a5/20261024T112344-route11-boot/`,
+  `evidence/a5/20261024T113700-route11-result/`,
+  `evidence/a5/20261024T115500-route12-build/`,
+  `evidence/a5/20261024T121000-route12-boot/`,
+  `evidence/a5/20261024T121000-route12-console/`.
+- Device after route12: iOS lock screen; active_slot=a; no partition
+  writes; no token consumed; HFS remains dirty (route11/route12 rw
+  mounts, no fsck).
+
 ## 2026-10-24 11:05 — route10: M_TX_FIFO_RD_ERR on every pageSet
 
 - Route10 `output/a4.2/first-light-geni-irq/shim-boot.img`
