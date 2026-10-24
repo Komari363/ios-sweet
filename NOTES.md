@@ -1,5 +1,26 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 05:08 — route20: S_AHB is not a fatal SE18 condition
+
+- `0098-sweet-gcc-s-ahb-nonfatal.patch` (`f25713e`, CI `40132235849`
+  success) changes `SweetGCC::enableSE()` so that only `M_AHB` and `SE18`
+  must halt-clear.  `S_AHB` may stay hardware-voted (`0x80000002`); it is
+  logged as `S_AHB still voted (s=...)` and the SE18 path proceeds.
+- Kernel `output/a4.2/ci-40132235849/kernel.development.sweet`,
+  17,274,808 B, sha256 `8aa210f6...` (contains the new string
+  `S_AHB still voted (s=0x%x)`).
+- Boot image `output/a4.2/first-light-route20-touch/shim-boot.img`,
+  16,871,424 B, sha256 `18c38cb9...`; CMDLINE has
+  `sweetboot=1 sweetboot_delay_ms=300000 sweetlog=1
+  sweetnovatek_poll=1 sweettouch=0 ufsrw=1 rootrw=1`.
+- The image is a touch-precondition baseline, not a no-reset touch-test
+  image: it will reset after 300 s.  If the ring shows `xfer len=41` /
+  `fw=` / `packets`, build a second image with `sweetboot=0` for the
+  human SpringBoard test.
+- A3 was clean before this boot; a rw mount will dirty it again.  The
+  cycle collects the ring, reflashes A3, and uses
+  `device-cmd.sh reboot-bootloader-fastboot` to wait for the late serial.
+
 ## 2026-10-25 04:40 — A3 reboot bootloader: confirmed late success
 
 - The 04:17–04:31 experiment was first recorded as a negative result, but
