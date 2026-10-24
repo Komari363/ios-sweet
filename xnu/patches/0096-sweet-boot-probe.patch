@@ -1,0 +1,62 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -20,6 +20,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
++#include <sys/reboot.h>
+ #include <sys/systm.h>
+ #include <sys/buf.h>
+ #include <sys/conf.h>
+@@ -583,6 +584,33 @@
+ 	.d_type       = D_DISK,
+ };
+ 
++/*
++ * Diagnostic-only boot/routing probe.  SWEET has no PE_halt_restart hook,
++ * so install a temporary PSCI SYSTEM_RESET hook and drive the ordinary
++ * reboot_kernel() path.  This runs before HFS+ mount and writes nothing.
++ */
++extern int (*PE_halt_restart)(unsigned int type);
++
++static void __attribute__((noreturn))
++sweet_boot_probe_reset(void)
++{
++	register uint64_t x0 __asm__("x0") = 0x84000009ULL; /* PSCI SYSTEM_RESET */
++
++	__asm__ volatile("smc #0" : "+r"(x0) : :
++	    "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10",
++	    "x11", "x12", "x13", "x14", "x15", "x16", "x17", "cc", "memory");
++	for (;;) {
++		;
++	}
++}
++
++static int
++sweet_boot_probe_halt_restart(__unused unsigned int type)
++{
++	sweet_boot_probe_reset();
++	return -1;
++}
++
+ static int
+ sweet_ufs_init(void)
+ {
+@@ -666,6 +694,17 @@
+ 		    sweetpanic);
+ 		panic("SWEET-PANIC-PROBE");
+ 	}
++	int sweetboot = 0;
++	if (PE_parse_boot_argn("sweetboot", &sweetboot, sizeof(sweetboot)) &&
++	    sweetboot != 0) {
++		int rc;
++		printf("SWEET BOOT PROBE: sweetboot=%d, reboot_kernel before root mount\n",
++		    sweetboot);
++		PE_halt_restart = &sweet_boot_probe_halt_restart;
++		delay(1000000);
++		rc = reboot_kernel(RB_QUICK | RB_NOSYNC, NULL);
++		panic("SWEET-BOOT-PROBE: reboot_kernel returned %d", rc);
++	}
+ 	sweet_log_start();
+ 	sweet_sample_start();
+ 	/* Input drivers (HID services in iokit/Kernel/arm/hid/SweetHID.cpp). */
