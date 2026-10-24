@@ -1,5 +1,35 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 13:15 — route13 built: GENI SE initialization
+
+- Human authorized the SE-initialization route at 13:05 after route12
+  exhausted `sweet-touch-spi-cmd` 3/3. Patch `0088-sweet-geni-se-init.patch`
+  (commit `bddacd9`) adds `SweetGeniSPI::configureSE()`, called once after
+  pins/clock before the first transfer.
+- It mirrors the working SE7 I2C setup and Linux `geni_se_init()`:
+  CGC/output/force-default, FIFO mode, `BYTE_GRAN=0`, 8-bit packing
+  `0x0007f8fe` / `0x000ffefe` (four words per 32-bit FIFO entry), RX
+  watermarks, clear M/S IRQs, and no external `SE_IRQ_EN` routing (local
+  `M_IRQ_STATUS` polling only). It also restores route11's TX-prefill
+  order before `M_CMD0`; route12's start-first order is removed.
+- CI `40064867994` **success** (head `bddacd9`, macos-14,
+  DEVELOPMENT/SWEET). Kernel
+  `output/a4.2/ci-40064867994/xnu-kernel/kernel.development.sweet`,
+  17,274,496 B, sha256 `9a41540c...`.
+- Image `output/a4.2/first-light-geni-se/shim-boot.img`, 16,871,424 B,
+  sha256 `1e2972ee...`; payload `9a2aa1b5...`, ADT `d55020b3...`.
+  CMDLINE is the same as route10/11/12 (`sweettouch=0
+  sweetnovatek_poll=1`, console visible, sweetlog=1).
+- Local single-file compile passed (`0 of 1 failed`) using the route12
+  buildtree; patch applies cleanly to the route12 baseline.
+- **Not booted**: at build time both adb and fastboot had zero devices.
+  Device must be brought to fastboot and the image booted once.
+- Next: boot route13 once, then check whether `pageSet()` reaches
+  `SWEET NVT: fw=` / packets and whether touch responds. If it still
+  fails, the next evidence is the new `SE init` readback and the first
+  transfer registers, not another FIFO-order change.
+- Evidence: `evidence/a5/20261024T130500-route13-build/`.
+
 ## 2026-10-24 12:20 — route11/route12 fail; `sweet-touch-spi-cmd` 3/3 exhausted
 
 - Route11 (`0086`, `5261df8`, CI `40057441034`, image
