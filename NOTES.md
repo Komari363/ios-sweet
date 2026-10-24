@@ -1,5 +1,38 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 04:04 — sweetboot 5-minute delayed reset works; A3 fastboot serial caveat
+
+- `0097-sweet-boot-delay.patch` (`31d5bc6`, CI `40126413434` success)
+  keeps `sweetboot=1` as the trigger, starts a kernel thread, sleeps
+  `300 * hz` (300 s), **then** installs `PE_halt_restart` and calls
+  `reboot_kernel(RB_QUICK | RB_NOSYNC, NULL)`.
+- First attempt with hook installed before the thread sleep (`c8bbe55`)
+  used `ufsrw=0 rootrw=0`; it reached Android after only 45.6 s, so it is
+  recorded as a negative result. The hook was moved into the timer path
+  before the successful test.
+- 03:44–03:51 reflashed clean A3 `ios16-root.simg` (24/24 sparse chunks,
+  345.910 s, rc=0; boot hashes refreshed and matched). The flash completed
+  with `???????????? fastboot`; a manual reboot to fastboot restored
+  `9e34edec`. This is now tracked as `a3-fastboot-serial` in the root
+  STUCK.md. Candidate only, not implemented: a fixed
+  `fastboot reboot bootloader` template after `flash iosroot`; it needs a
+  device-cmd command, AGENTS whitelist update, selftest, and a serial
+  selection rule.
+- 04:04:50.133 booted `first-light-sweetboot-delay5-ui/shim-boot.img`
+  (sha256 `08d03e40...`) once with `ufsrw=1 rootrw=1`,
+  `sweetboot_delay_ms=300000`. Android ADB appeared at 04:10:45; uptime
+  14.97 s at 04:10:49 implies Android kernel start ~04:10:34.7, i.e.
+  **344.6 s after fastboot boot**, and `sys.boot_completed=1` at
+  04:11:05. The nominal timer is 300 s; the extra time is boot/loader and
+  thread-start path. This is a successful five-minute-range reset, not
+  the earlier 45 s early return.
+- No `boot_a/b`, vbmeta, misc or userdata writes. The iOS boot mounted
+  A3 rw, so the HFS volume is dirty again; re-evaluate A3 before the next
+  UI-sensitive boot.
+- Evidence: `evidence/a5/20261025T035100-sweetboot-delay5-ui-build/`,
+  `evidence/a5/20261025T040450-sweetboot-delay5-ui-boot/`,
+  `evidence/a5/20261025T034425-a3-reflash/`.
+
 ## 2026-10-25 02:47 — sweetboot probe: normal reboot path, host n=0
 
 - Patch `0096-sweet-boot-probe.patch` (`ac1946c`) adds a `sweetboot`
