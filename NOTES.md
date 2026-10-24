@@ -18,6 +18,18 @@
   fastboot/Android. This looks like the panic handler staying in
   panic/debugger, not ABL retry. The screen also shows
   `SWEET WDT ... never fires`, so no watchdog reset is expected.
+
+## 2026-10-25 02:29 — panic-routing closed: panic did not reset
+
+- User confirmed the screen stayed on the panic text until a manual force-reboot
+  into fastboot. This is not an ABL routing choice; the panic handler did not
+  reset, so ABL was never reached.
+- `device-cmd.sh devices` at 02:29:38: fastboot n=1, serial `9e34edec`;
+  `probe slot` at 02:29:41: `a` (fastboot-getvar).
+- Final result: `sweetpanic=1` is not usable as an auto-reset transport, and
+  the earlier "ABL retry" reading remains retracted. No further panic boots.
+- Next candidate (not implemented, not booted): `sweetreboot` probe. No partition
+  writes, no HFS+ mount, no token consumed.
 - Conclusion: panic is not a usable automatic reset path. Test a
   `reboot` probe next, not another panic. No partition write; HFS+ was
   not mounted. Do not boot the panic probe again.
