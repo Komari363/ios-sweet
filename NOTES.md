@@ -1,5 +1,44 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-24 14:58 — route13 boot fails: SE init readback correct, command never completes
+
+- Human reached fastboot at 14:22:44; route13 image
+  `output/a4.2/first-light-geni-se/shim-boot.img`
+  (sha256 `1e2972ee...`, kernel `9a41540c...`, CI `40064867994`)
+  booted once at 14:24:15.  It reached the SpringBoard lock screen with
+  no panic, but touch still did not respond.
+- TWRP was booted at 14:57:40 only to read the ring, then returned to
+  fastboot at 14:58:58.  No partition was written.
+- Ring: 4,198,400 B, sha256
+  `b736bec576f0cc5ee1deb414c9ef9c4a56fe233a26ccd3b404125310af23fd50`;
+  parser `# version 1, ring 4194304, total 271050 bytes, flush #192`;
+  text 270,589 B, sha256 `3cb569e6...`.
+- `SE init` did execute and read back exactly:
+  `fw=0x100 if=0x0 cgc=0x7f out=0x7f force=0x0 gran=0x0`;
+  `pack=0x7f8fe/0xffefe/0x7f8fe/0xffefe`.
+  But each `xfer len=3` now reports:
+  `cmd timeout len=3 status=0x41 irq=0x40000000 en=0x3300000f
+  ctrl=0x0 mcmd=0x8000000 txfifo=0x0 rxfifo=0x0`.
+  `mcmd=0x8000000` is the expected `SPI_TX_ONLY` opcode `1 << 27`;
+  `status=0x41` keeps `GENI_STATUS` bit 0 (command active); `irq` has
+  only the TX watermark bit; `M_IRQ_STATUS` bit 0 (`M_CMD_DONE`) never
+  asserts.  The one prefilled 3-byte FIFO word is consumed (`txfifo=0`)
+  but the command does not finish.  `pageSet()` still fails and there is
+  no `xfer len=41/66`, `SWEET NVT: fw=` or packet.
+- This is `sweet-touch-spi-cmd` failure **1/3**, not exhaustion.  No
+  route14 was started.  The useful conclusion is that `SE init` is
+  necessary-looking but not sufficient; do not patch FIFO order again.
+- Candidate only, not implemented: `SweetGCC::enableSE(18)` only sets the
+  branch enable bit and waits for BRANCH_HALT_VOTED; it does not configure
+  the `GCC_QUPV3_WRAP2_S1_CLK` root/RCG or its divider.  AHB register
+  access works while the SE serial clock may be absent, which would leave
+  `M_CMD0` active forever with `M_CMD_DONE` clear.  The other candidate is
+  the `SPI_TX_TRANS_LEN` / packing word contract (3 SPI words in one
+  32-bit FIFO entry).  Both need a register-readback experiment, not a
+  blind boot.
+- Evidence: `evidence/a5/20261024T145800-route13-result/`.
+- Device after ring: fastboot, active_slot=a, no token, no partition write.
+
 ## 2026-10-24 13:15 — route13 built: GENI SE initialization
 
 - Human authorized the SE-initialization route at 13:05 after route12
@@ -22,13 +61,11 @@
   sweetnovatek_poll=1`, console visible, sweetlog=1).
 - Local single-file compile passed (`0 of 1 failed`) using the route12
   buildtree; patch applies cleanly to the route12 baseline.
-- **Not booted**: at build time both adb and fastboot had zero devices.
-  Device must be brought to fastboot and the image booted once.
-- Next: boot route13 once, then check whether `pageSet()` reaches
-  `SWEET NVT: fw=` / packets and whether touch responds. If it still
-  fails, the next evidence is the new `SE init` readback and the first
-  transfer registers, not another FIFO-order change.
-- Evidence: `evidence/a5/20261024T130500-route13-build/`.
+- At build time both adb and fastboot had zero devices.  The image was
+  booted later at 14:24:15; see the 14:58 section above for the result.
+  It failed at `pageSet()` with `cmd timeout`; do not repeat this build.
+- Build evidence: `evidence/a5/20261024T130500-route13-build/`.
+  Result evidence: `evidence/a5/20261024T145800-route13-result/`.
 
 ## 2026-10-24 12:20 — route11/route12 fail; `sweet-touch-spi-cmd` 3/3 exhausted
 
