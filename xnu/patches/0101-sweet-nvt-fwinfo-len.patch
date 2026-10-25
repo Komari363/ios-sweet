@@ -1,0 +1,11 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -229,7 +229,7 @@
+ SweetNovatekTouch::readFwInfo()
+ {
+ 	uint8_t info[40] = { 0 };
+-	if (!readData(NVT_EVENT_BUF | NVT_EVENT_FWINFO, info, 39)) {
++	if (!readData(NVT_EVENT_BUF | NVT_EVENT_FWINFO, info, 38)) {
+ 		return false;
+ 	}
+ 	fFwVer = info[0];
