@@ -1,5 +1,24 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 22:06 — route26: Novatek bootloader reset + chip trim
+
+- route25 loopback booted 21:52:35 and returned to TWRP at 21:58:45:
+  `loopback ret=0xe00002ca tx=a55a00ff rx=00000000 rxfifo=0x0
+  mirq=0x80 geni=0x0 loop=0x1`; `rx empty len=4`; `M_CMD_DONE`
+  set but RX empty.  FWINFO still `short rx=0`.  route25 = 1/3.
+  The loopback result is negative/inconclusive: this QUP may not
+  implement `SPI_LOOPBACK` usefully, so it does not prove host RX is bad.
+- Linux `nvt_ts_check_chip_ver_trim()` first calls
+  `nvt_bootloader_reset()`: write `0x69` to `SWRST_N8_ADDR=0x03F0FE`,
+  wait 5 ms, disable `SPI_RD_FAST_ADDR=0x03F310`, then read chip trim
+  at `CHIP_VER_TRIM_ADDR=0x03F004` (Linux `CTP_SPI_READ(buf,7)` =
+  command + 6 data, total 8).
+- `0103-sweet-nvt-bootloader-trim.patch` (`56bd740`) adds that sequence
+  and removes the route25 loopback call; CI `40200642592` queued.
+- If chip trim reads 6 bytes, NVT/host RX are basically working and the
+  remaining issue is FWINFO/firmware.  If it still returns RX=0, check
+  NVT power/MISO/reset.
+
 ## 2026-10-25 21:10 — route25: GENI loopback + RX diagnostic
 
 - Human reset after route24 exhausted the generation at 3/3:
