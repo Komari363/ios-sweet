@@ -1,5 +1,5 @@
---- a/xnu/iokit/Kernel/arm/SweetNovatekTouch.cpp
-+++ b/xnu/iokit/Kernel/arm/SweetNovatekTouch.cpp
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
 @@ -83,9 +83,23 @@
  	fTLMM->setMux(NVT_IRQ_GPIO, 0);
  	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
@@ -61,8 +61,8 @@
  }
  
  bool
---- a/xnu/iokit/Kernel/arm/SweetNovatekTouch.h
-+++ b/xnu/iokit/Kernel/arm/SweetNovatekTouch.h
+--- a/iokit/Kernel/arm/SweetNovatekTouch.h
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h
 @@ -27,6 +27,8 @@
  	static void pollFired(OSObject *owner, IOTimerEventSource *sender);
  	bool findProviders();
