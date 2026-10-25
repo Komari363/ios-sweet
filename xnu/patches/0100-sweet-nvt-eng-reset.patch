@@ -40,7 +40,7 @@
 +		return false;
 +	}
 +	uint8_t tx[2] = {
-+		(uint8_t)(addr & 0x7f), value
++		(uint8_t)((addr & 0x7f) | 0x80u), value
 +	};
 +	return fSPI->spiTransfer(tx, NULL, sizeof(tx), NVT_SPI_HZ, 0, 0, 8) ==
 +	    kIOReturnSuccess;
@@ -50,8 +50,8 @@
 +SweetNovatekTouch::nvtEngReset()
 +{
 +	/* Linux nvt_eng_reset(): write 0x5A to ENG_RST_ADDR (0x7FFF80)
-+	 * before the 10 ms POR wait.  Without this the controller may stay
-+	 * in its previous host-interface state and drive no MISO. */
++	 * before the 10 ms POR wait.  Novatek writes need bit7
++	 * (SPI_WRITE_MASK), or the transfer is a read and no reset. */
 +	if (!writeData(0x7fff80u, 0x5au)) {
 +		IOLog("SWEET NVT: eng reset write failed\n");
 +		return false;
