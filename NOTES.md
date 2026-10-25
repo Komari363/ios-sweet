@@ -14,7 +14,11 @@
   at `CHIP_VER_TRIM_ADDR=0x03F004` (Linux `CTP_SPI_READ(buf,7)` =
   command + 6 data, total 8).
 - `0103-sweet-nvt-bootloader-trim.patch` (`56bd740`) adds that sequence
-  and removes the route25 loopback call; CI `40200642592` queued.
+  and removes the route25 loopback call.  CI `40200642592` succeeded,
+  log confirms the patch is applied.  Image
+  `output/a4.2/first-light-route26-nvt-trim/shim-boot.img`, sha256
+  `7c2addd3...`; `payload.bin` sha256 `f9aeba4d...`; strings contain
+  `bootloader reset`/`chip trim`.  Not booted yet.
 - If chip trim reads 6 bytes, NVT/host RX are basically working and the
   remaining issue is FWINFO/firmware.  If it still returns RX=0, check
   NVT power/MISO/reset.
