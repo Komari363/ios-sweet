@@ -1,0 +1,17 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -83,6 +83,14 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(4000);
++	IOLog("SWEET NVT: vddio=%u irq=%u before power cycle\n",
++	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
++	fTLMM->gpioWrite(NVT_VDDIO_GPIO, false);
++	IODelay(10000);
++	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
++	IODelay(4000);
++	IOLog("SWEET NVT: vddio=%u irq=%u after power cycle\n",
++	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 	if (nvtEngReset()) {
+ 		IOLog("SWEET NVT: eng reset sent\n");
+ 	} else {
