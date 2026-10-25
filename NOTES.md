@@ -1,5 +1,27 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-26 00:49 — route28: NVT firmware loading from ADT
+
+- Human reset: route25/26/27 = 3/3; next generation is NVT firmware load.
+- `0105-sweet-nvt-fwload.patch` adds a Linux `nvt_download_firmware_hw_crc`
+  subset to `SweetNovatekTouch`: `nvtBootloaderReset()`, BLD CRC register
+  banks (ILM/DLM), four-part firmware write, BLD/FW CRC enable, boot-ready,
+  reset-state wait.
+- Firmware data is **not** embedded in the kernel.  The local route image
+  injects `novatek_nt36523_fw01.bin` (196,608 B, sha256
+  `72364eca...`) as ADT property `touch/novatek,firmware`; the driver
+  reads it with `provider->getProperty()`.
+- Parsed firmware view: ILM SRAM 0x0 / BIN 0x200 / 106127 / crc
+  `0xdf90f936`; DLM 0x20000 / 0x22000 / 49527 / `0xe25fc71d`; header
+  0x2c178 / 0x0 / 255 / `0x5a9c9b73`; header 0x2c278 / 0x100 / 255 /
+  `0x799fc1a9`.
+- Patch is not yet CI-built and route28 is not booted.  Device probe says
+  TWRP active slot a (the human reported b; use the probe value, no
+  set_active).
+- Next: CI build 0105, build image with firmware-injected ADT, A3 reflash,
+  fastboot boot once, collect ring.  Targets: `firmware blob`, `firmware
+  part ... written`, `firmware load complete`, `fw=`/`packets`.
+
 ## 2026-10-26 00:42 — route27: NVT VDDIO power-cycle, still RX=0
 
 - `0104-sweet-nvt-vddio-cycle.patch` (`4a447d0`) toggles VDDIO GPIO100

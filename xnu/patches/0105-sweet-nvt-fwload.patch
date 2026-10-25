@@ -1,0 +1,284 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.h
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h
+@@ -31,6 +31,13 @@
+ 	bool nvtEngReset();
+ 	bool nvtBootloaderReset();
+ 	bool readChipTrim();
++	bool writeBuffer(uint32_t addr, const uint8_t *data, uint32_t len);
++	bool loadFirmwareBlob(const void *data, uint32_t len);
++	bool nvtSetBldHwCrc();
++	bool nvtBldCrcEnable();
++	bool nvtFwCrcEnable();
++	bool nvtBootReady();
++	bool nvtCheckResetState(uint8_t state);
+ 	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
+ 	bool readFwInfo();
+ 	void poll();
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -20,7 +20,9 @@
+ #include <IOKit/IOLib.h>
+ #include <IOKit/IOWorkLoop.h>
+ #include <IOKit/IOTimerEventSource.h>
++#include <libkern/c++/OSData.h>
+ #include <pexpert/pexpert.h>
++#include <string.h>
+ 
+ #define NVT_EVENT_BUF            0x02fe00u
+ #define NVT_EVENT_FWINFO         0x78u
+@@ -32,6 +34,27 @@
+ #define NVT_IRQ_GPIO             39u
+ #define NVT_VDDIO_GPIO           100u
+ #define NVT_SPI_HZ               9600000u
++#define NVT_FW_CHUNK             4096u
++#define NVT_BLD_CRC_EN           0x03f30eu
++#define NVT_BOOT_RDY             0x03f10du
++#define NVT_RESET_STATE          0x02fe60u
++
++struct SweetNvtFwPart {
++	uint32_t sram;
++	uint32_t bin;
++	uint32_t size;
++	uint32_t crc;
++};
++
++/* novatek_nt36523_fw01.bin, parsed with the Linux nvt_bin_header_parser:
++ * ILM, DLM, and the two 255-byte header records.  CRCs are the values from
++ * the firmware header (hardware CRC path, hw_crc=2). */
++static const SweetNvtFwPart kNvtFwParts[] = {
++	{ 0x00000u, 0x00200u, 106127u, 0xdf90f936u },
++	{ 0x20000u, 0x22000u,  49527u, 0xe25fc71du },
++	{ 0x2c178u, 0x00000u,    255u, 0x5a9c9b73u },
++	{ 0x2c278u, 0x00100u,    255u, 0x799fc1a9u },
++};
+ 
+ extern "C" void sweet_hid_touch(int finger, int down, int x, int y);
+ 
+@@ -91,19 +114,35 @@
+ 	IODelay(4000);
+ 	IOLog("SWEET NVT: vddio=%u irq=%u after power cycle\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+-	if (nvtEngReset()) {
+-		IOLog("SWEET NVT: eng reset sent\n");
+-	} else {
+-		IOLog("SWEET NVT: eng reset failed; continuing\n");
+-	}
+-	IODelay(10000);
+-	if (nvtBootloaderReset()) {
+-		IOLog("SWEET NVT: bootloader reset sent\n");
+-	} else {
+-		IOLog("SWEET NVT: bootloader reset failed; continuing\n");
++	OSData *fwBlob = OSDynamicCast(OSData,
++	    provider->getProperty("novatek,firmware"));
++	bool fwLoaded = false;
++	if (fwBlob != NULL && fwBlob->getLength() > 0x1000) {
++		IOLog("SWEET NVT: firmware blob %u bytes\n",
++		    (unsigned)fwBlob->getLength());
++		fwLoaded = loadFirmwareBlob(fwBlob->getBytesNoCopy(),
++		    fwBlob->getLength());
++		if (fwLoaded) {
++			IOLog("SWEET NVT: firmware load complete\n");
++		} else {
++			IOLog("SWEET NVT: firmware load failed; fallback\n");
++		}
+ 	}
+-	if (!readChipTrim()) {
+-		IOLog("SWEET NVT: chip trim read failed\n");
++	if (!fwLoaded) {
++		if (nvtEngReset()) {
++			IOLog("SWEET NVT: eng reset sent\n");
++		} else {
++			IOLog("SWEET NVT: eng reset failed; continuing\n");
++		}
++		IODelay(10000);
++		if (nvtBootloaderReset()) {
++			IOLog("SWEET NVT: bootloader reset sent\n");
++		} else {
++			IOLog("SWEET NVT: bootloader reset failed; continuing\n");
++		}
++		if (!readChipTrim()) {
++			IOLog("SWEET NVT: chip trim read failed\n");
++		}
+ 	}
+ 	bool fwOk = false;
+ 	for (uint32_t attempt = 0; attempt < 3; attempt++) {
+@@ -252,6 +291,179 @@
+ 	return true;
+ }
+ 
++bool
++SweetNovatekTouch::writeBuffer(uint32_t addr, const uint8_t *data, uint32_t len)
++{
++	if (len == 0) {
++		return true;
++	}
++	if (data == NULL) {
++		return false;
++	}
++	uint8_t *tx = (uint8_t *)IOMalloc(NVT_FW_CHUNK + 1);
++	if (tx == NULL) {
++		return false;
++	}
++	bool ok = true;
++	for (uint32_t off = 0; off < len; off += NVT_FW_CHUNK) {
++		uint32_t chunk = len - off;
++		if (chunk > NVT_FW_CHUNK) {
++			chunk = NVT_FW_CHUNK;
++		}
++		if (!pageSet(addr + off)) {
++			ok = false;
++			break;
++		}
++		tx[0] = (uint8_t)((addr + off) & 0x7fu) | 0x80u;
++		memcpy(tx + 1, data + off, chunk);
++		if (fSPI->spiTransfer(tx, NULL, chunk + 1, NVT_SPI_HZ, 0, 0, 8) !=
++		    kIOReturnSuccess) {
++			ok = false;
++			break;
++		}
++	}
++	IOFree(tx, NVT_FW_CHUNK + 1);
++	return ok;
++}
++
++bool
++SweetNovatekTouch::nvtSetBldHwCrc()
++{
++	static const uint32_t desAddr[2] = { 0x03f128u, 0x03f12cu };
++	static const uint32_t lenAddr[2] = { 0x03f118u, 0x03f130u };
++	static const uint32_t crcAddr[2] = { 0x03f100u, 0x03f104u };
++	for (uint32_t i = 0; i < 2; i++) {
++		uint32_t sram = kNvtFwParts[i].sram;
++		uint32_t size = kNvtFwParts[i].size;
++		uint32_t crc = kNvtFwParts[i].crc;
++		uint8_t des[3] = {
++			(uint8_t)(sram & 0xffu),
++			(uint8_t)((sram >> 8) & 0xffu),
++			(uint8_t)((sram >> 16) & 0xffu)
++		};
++		uint8_t lenb[3] = {
++			(uint8_t)(size & 0xffu),
++			(uint8_t)((size >> 8) & 0xffu),
++			(uint8_t)((size >> 16) & 0x01u)
++		};
++		uint8_t crcb[4] = {
++			(uint8_t)(crc & 0xffu),
++			(uint8_t)((crc >> 8) & 0xffu),
++			(uint8_t)((crc >> 16) & 0xffu),
++			(uint8_t)((crc >> 24) & 0xffu)
++		};
++		if (!writeBuffer(desAddr[i], des, sizeof(des)) ||
++		    !writeBuffer(lenAddr[i], lenb, sizeof(lenb)) ||
++		    !writeBuffer(crcAddr[i], crcb, sizeof(crcb))) {
++			IOLog("SWEET NVT: BLD CRC bank %u failed\n", i);
++			return false;
++		}
++	}
++	return true;
++}
++
++bool
++SweetNovatekTouch::nvtBldCrcEnable()
++{
++	uint8_t value = 0;
++	if (!readData(NVT_BLD_CRC_EN, &value, 1)) {
++		IOLog("SWEET NVT: BLD CRC read failed\n");
++		return false;
++	}
++	value |= 0x80u;
++	if (!writeBuffer(NVT_BLD_CRC_EN, &value, 1)) {
++		IOLog("SWEET NVT: BLD CRC enable failed\n");
++		return false;
++	}
++	return true;
++}
++
++bool
++SweetNovatekTouch::nvtFwCrcEnable()
++{
++	uint8_t zero = 0;
++	uint8_t cmd = 0xaeu;
++	if (!writeBuffer(NVT_RESET_STATE, &zero, 1) ||
++	    !writeBuffer(NVT_EVENT_BUF | NVT_EVENT_HANDSHAKE, &cmd, 1)) {
++		IOLog("SWEET NVT: FW CRC enable failed\n");
++		return false;
++	}
++	return true;
++}
++
++bool
++SweetNovatekTouch::nvtBootReady()
++{
++	uint8_t one = 1;
++	if (!writeBuffer(NVT_BOOT_RDY, &one, 1)) {
++		IOLog("SWEET NVT: boot ready write failed\n");
++		return false;
++	}
++	IODelay(5000);
++	return true;
++}
++
++bool
++SweetNovatekTouch::nvtCheckResetState(uint8_t state)
++{
++	uint8_t info[6] = { 0 };
++	for (uint32_t i = 0; i < 10; i++) {
++		if (readData(NVT_RESET_STATE, info, sizeof(info))) {
++			if (info[1] >= state && info[1] <= 0xafu) {
++				return true;
++			}
++		}
++		IODelay(10000);
++	}
++	IOLog("SWEET NVT: reset state %02x not reached (last %02x)\n",
++	    (unsigned)state, (unsigned)info[1]);
++	return false;
++}
++
++bool
++SweetNovatekTouch::loadFirmwareBlob(const void *data, uint32_t len)
++{
++	const uint8_t *fw = (const uint8_t *)data;
++	if (fw == NULL || len < 0x400) {
++		IOLog("SWEET NVT: firmware blob too small\n");
++		return false;
++	}
++	if (memcmp(fw + len - 3, "NVT", 3) != 0) {
++		IOLog("SWEET NVT: firmware end flag missing\n");
++		return false;
++	}
++	if (!nvtBootloaderReset()) {
++		IOLog("SWEET NVT: firmware bootloader reset failed\n");
++		return false;
++	}
++	if (!nvtSetBldHwCrc()) {
++		return false;
++	}
++	for (uint32_t i = 0; i < sizeof(kNvtFwParts) / sizeof(kNvtFwParts[0]); i++) {
++		uint32_t size = kNvtFwParts[i].size;
++		if (size == 0) {
++			continue;
++		}
++		if (kNvtFwParts[i].bin + size + 1 > len) {
++			IOLog("SWEET NVT: firmware part %u out of range\n", i);
++			return false;
++		}
++		if (!writeBuffer(kNvtFwParts[i].sram,
++		    fw + kNvtFwParts[i].bin, size + 1)) {
++			IOLog("SWEET NVT: firmware part %u write failed\n", i);
++			return false;
++		}
++		IOLog("SWEET NVT: firmware part %u written %u\n", i, size + 1);
++	}
++	if (!nvtBldCrcEnable() || !nvtFwCrcEnable() || !nvtBootReady()) {
++		return false;
++	}
++	if (!nvtCheckResetState(0xa0u)) {
++		return false;
++	}
++	return true;
++}
++
+ bool
+ SweetNovatekTouch::readData(uint32_t addr, uint8_t *buf, uint32_t len)
+ {
