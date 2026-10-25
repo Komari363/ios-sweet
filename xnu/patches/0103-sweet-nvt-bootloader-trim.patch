@@ -1,0 +1,73 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.h
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h
+@@ -29,6 +29,8 @@
+ 	bool pageSet(uint32_t addr);
+ 	bool writeData(uint32_t addr, uint8_t value);
+ 	bool nvtEngReset();
++	bool nvtBootloaderReset();
++	bool readChipTrim();
+ 	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
+ 	bool readFwInfo();
+ 	void poll();
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -83,13 +83,20 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(4000);
+-	fSPI->loopbackTest();
+ 	if (nvtEngReset()) {
+ 		IOLog("SWEET NVT: eng reset sent\n");
+ 	} else {
+ 		IOLog("SWEET NVT: eng reset failed; continuing\n");
+ 	}
+ 	IODelay(10000);
++	if (nvtBootloaderReset()) {
++		IOLog("SWEET NVT: bootloader reset sent\n");
++	} else {
++		IOLog("SWEET NVT: bootloader reset failed; continuing\n");
++	}
++	if (!readChipTrim()) {
++		IOLog("SWEET NVT: chip trim read failed\n");
++	}
+ 	bool fwOk = false;
+ 	for (uint32_t attempt = 0; attempt < 3; attempt++) {
+ 		if (readFwInfo()) {
+@@ -206,6 +213,37 @@
+ 	return true;
+ }
+ 
++bool
++SweetNovatekTouch::nvtBootloaderReset()
++{
++	/* Linux nvt_bootloader_reset(): SWRST_N8_ADDR=0x03F0FE, 0x69,
++	 * then disable SPI_RD_FAST at 0x03F310. */
++	if (!writeData(0x03f0feu, 0x69u)) {
++		IOLog("SWEET NVT: bootloader reset write failed\n");
++		return false;
++	}
++	IODelay(5000);
++	if (!writeData(0x03f310u, 0x00u)) {
++		IOLog("SWEET NVT: SPI_RD_FAST disable failed; continuing\n");
++	}
++	return true;
++}
++
++bool
++SweetNovatekTouch::readChipTrim()
++{
++	/* Linux nvt_ts_check_chip_ver_trim(): CTP_SPI_READ(buf, 7) means
++	 * command + 6 data bytes, total transfer 8. */
++	uint8_t trim[6] = { 0 };
++	if (!readData(0x03f004u, trim, sizeof(trim))) {
++		return false;
++	}
++	IOLog("SWEET NVT: chip trim %02x %02x %02x %02x %02x %02x\n",
++	    (unsigned)trim[0], (unsigned)trim[1], (unsigned)trim[2],
++	    (unsigned)trim[3], (unsigned)trim[4], (unsigned)trim[5]);
++	return true;
++}
++
+ bool
+ SweetNovatekTouch::readData(uint32_t addr, uint8_t *buf, uint32_t len)
+ {
