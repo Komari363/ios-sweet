@@ -1,5 +1,24 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 21:10 — route25: GENI loopback + RX diagnostic
+
+- Human reset after route24 exhausted the generation at 3/3:
+  route22b 1/3, route23 2/3, route24 3/3.  All reached SpringBoard, but
+  every NVT read ended at `short rx len=40/67 got=0`; no `fw=`/`packets`.
+- route24 (`0101`, `2c304b8`) aligned FWINFO with Linux: 38 data bytes,
+  total transfer 40.  It still produced `rx empty` with `M_CMD_DONE`.
+- New `0102-sweet-geni-loopback.patch` (`e9ad487`) adds:
+  - `SweetGeniSPI::loopbackTest()`, which sets `SPI_LOOPBACK=1`, sends
+    `A5 5A 00 FF`, and logs `ret`, `rx`, `GENI_RX_FIFO_STATUS`,
+    `GENI_M_IRQ_STATUS`, `GENI_STATUS`, `SPI_LOOPBACK`.
+  - A register dump on the `M_CMD_DONE` + empty-RX path:
+    `SWEET SPI: rx empty len=... got=... rxfifo=... mirq=... geni=...`.
+  - Call from `SweetNovatekTouch::start()` before `nvtEngReset()`.
+- CI `40196153977` queued.  Image not built and not booted.
+- Interpret: `rx=a55a00ff` means the host GENI RX path works, so the
+  remaining problem is NVT/MISO/power.  `rx=00000000` with `rxfifo=0`
+  means the host RX/FIFO path is wrong.
+
 ## 2026-10-25 05:48 — route21 wrapper reset: no adb/fastboot after 900 s
 
 - route20 (`0098`, `18c38cb9...`) did reach `xfer len=3`: `S_AHB still
