@@ -10,33 +10,35 @@
  	uint32_t readReg(uint32_t off) const;
  	void writeReg(uint32_t off, uint32_t value);
  
-@@ -50,9 +53,11 @@
- 	uint32_t fFifoWidth;
+@@ -55,10 +58,12 @@
  	uint32_t fTestRuns;
  	uint32_t fXferCount;
+ 	uint32_t fIrqErrors;
 +	uint32_t fRxDiagCount;
  	bool fPlatformWarned;
  	bool fPinsReady;
  	bool fClockReady;
+ 	bool fSEReady;
 +	bool fLoopback;
  };
  
  #endif /* _SWEET_GENI_SPI_H */
 --- a/iokit/Kernel/arm/SweetGeniSPI.cpp
 +++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
-@@ -96,9 +96,11 @@
- 	fFifoWidth = 0;
+@@ -144,10 +144,12 @@
  	fTestRuns = 0;
  	fXferCount = 0;
+ 	fIrqErrors = 0;
 +	fRxDiagCount = 0;
  	fPlatformWarned = false;
  	fPinsReady = false;
  	fClockReady = false;
+ 	fSEReady = false;
 +	fLoopback = false;
  	if (!IOService::start(provider)) {
  		return false;
  	}
-@@ -172,6 +174,27 @@
+@@ -230,6 +232,29 @@
  	IOService::stop(provider);
  }
  
@@ -52,8 +54,10 @@
 +	fLoopback = false;
 +	writeReg(SPI_LOOPBACK, 0);
 +	IOLog("SWEET SPI: loopback ret=0x%x tx=%02x%02x%02x%02x rx=%02x%02x%02x%02x rxfifo=0x%x mirq=0x%x geni=0x%x loop=0x%x\n",
-+	    (unsigned)ret, tx[0], tx[1], tx[2], tx[3],
-+	    rx[0], rx[1], rx[2], rx[3],
++	    (unsigned)ret, (unsigned)tx[0], (unsigned)tx[1],
++	    (unsigned)tx[2], (unsigned)tx[3],
++	    (unsigned)rx[0], (unsigned)rx[1],
++	    (unsigned)rx[2], (unsigned)rx[3],
 +	    (unsigned)readReg(GENI_RX_FIFO_STATUS),
 +	    (unsigned)readReg(GENI_M_IRQ_STATUS),
 +	    (unsigned)readReg(GENI_STATUS),
@@ -64,7 +68,7 @@
  uint32_t
  SweetGeniSPI::readReg(uint32_t off) const
  {
-@@ -334,7 +357,7 @@
+@@ -502,7 +527,7 @@
  	writeReg(GENI_M_IRQ_CLEAR, 0xffffffffu);
  	writeReg(GENI_DMA_MODE_EN, 0);          /* FIFO mode */
  	writeReg(SPI_CPHA, 0);
@@ -73,14 +77,14 @@
  	writeReg(SPI_CPOL, 0);
  	writeReg(SPI_DEMUX_OUTPUT_INV, 0);
  	writeReg(SPI_DEMUX_SEL, cs & 0xf);
-@@ -393,6 +416,11 @@
+@@ -640,6 +665,11 @@
  				return kIOReturnIOError;
  			}
  			if (irq & SPI_IRQ_DONE) {
 +				if (fRxDiagCount++ < 4) {
 +					IOLog("SWEET SPI: rx empty len=%u got=%u rxfifo=0x%x mirq=0x%x geni=0x%x\n",
-+					    len, rx_off, (unsigned)status, (unsigned)irq,
-+					    (unsigned)readReg(GENI_STATUS));
++					    len, rx_off, readReg(GENI_RX_FIFO_STATUS),
++					    irq, readReg(GENI_STATUS));
 +				}
  				break;
  			}
