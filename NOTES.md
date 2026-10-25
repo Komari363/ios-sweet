@@ -1,5 +1,34 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-26 00:42 — route27: NVT VDDIO power-cycle, still RX=0
+
+- `0104-sweet-nvt-vddio-cycle.patch` (`4a447d0`) toggles VDDIO GPIO100
+  low 10 ms then high 4 ms before `nvtEngReset()`, and logs `gpioRead`
+  before/after.  CI `40209996557` success; image
+  `output/a4.2/first-light-route27-nvt-vddio/shim-boot.img`, sha256
+  `e906a78a...`; payload `8906da99...`.
+- 00:34:34 boot OKAY; A3 348.957 s; 300 s reset to Android a; ring at
+  00:41:36 (`80e0079d...`).
+- Ring: `vddio=0 irq=0` both before and after power cycle; `eng reset sent`;
+  `bootloader reset sent`; `xfer len=8/40` still `rx empty got=0
+  rxfifo=0x0 mirq=0x48200081 geni=0x0`; `chip trim read failed`; FWINFO
+  retry 1..3; no `fw=`/`packets`.
+- route25 1/3, route26 2/3, route27 3/3 — generation exhausted.  Stop;
+  need human STATE reset.  `vddio=0` may mean the rail is off or that
+  GPIO input readback is invalid for an output; next candidate should
+  dump GPIO100 CTL/IO and test active-low polarity, then NVT firmware.
+
+## 2026-10-25 23:59 — route26: bootloader reset + chip trim (2/3)
+
+- `0103` (`56bd740`) CI `40200642592` success; image `7c2addd3...`.
+- 23:35:56 cycle start; A3 346.777 s; 23:53:07 boot OKAY; 23:59:42 ring
+  (`d1cc102c...`).
+- `eng reset sent`, `bootloader reset sent`, `xfer len=8` then
+  `rx empty len=8 got=0 rxfifo=0x0 mirq=0x48200081 geni=0x0`,
+  `chip trim read failed`; `xfer len=40` still `short rx=40 got=0`;
+  FWINFO retry 1..3; no `fw=`/`packets`.
+- route26 = 2/3.  The next route was VDDIO power-cycle.
+
 ## 2026-10-25 22:06 — route26: Novatek bootloader reset + chip trim
 
 - route25 loopback booted 21:52:35 and returned to TWRP at 21:58:45:
