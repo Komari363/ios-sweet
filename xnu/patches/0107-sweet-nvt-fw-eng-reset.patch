@@ -1,0 +1,15 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -120,6 +120,12 @@
+ 	if (fwBlob != NULL && fwBlob->getLength() > 0x1000) {
+ 		IOLog("SWEET NVT: firmware blob %u bytes\n",
+ 		    (unsigned)fwBlob->getLength());
++		if (nvtEngReset()) {
++			IOLog("SWEET NVT: firmware eng reset sent\n");
++		} else {
++			IOLog("SWEET NVT: firmware eng reset failed; continuing\n");
++		}
++		IODelay(10000);
+ 		fwLoaded = loadFirmwareBlob(fwBlob->getBytesNoCopy(),
+ 		    fwBlob->getLength());
+ 		if (fwLoaded) {
