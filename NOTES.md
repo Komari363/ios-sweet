@@ -14,7 +14,16 @@
   - A register dump on the `M_CMD_DONE` + empty-RX path:
     `SWEET SPI: rx empty len=... got=... rxfifo=... mirq=... geni=...`.
   - Call from `SweetNovatekTouch::start()` before `nvtEngReset()`.
-- CI `40196153977` queued.  Image not built and not booted.
+- Early `0102` commit `e9ad487` did not apply in dxb: CI `40196153977`
+  logged `SweetGeniSPI.h/.cpp: patch does not apply` and built without it.
+  That image is invalid and was moved to
+  `first-light-route25-loopback-invalid-0102`.
+- Rebasing `0102` onto the CI build tree gives `789b64f`; CI
+  `40197338752` succeeded and the log shows the patch being applied.
+  Image `output/a4.2/first-light-route25-loopback/shim-boot.img` is
+  16,871,424 B, sha256 `83738edc...`; `payload.bin` sha256
+  `d0cc6155...`; `strings` contains `SWEET SPI: loopback` and
+  `SWEET SPI: rx empty`.  Not booted yet.
 - Interpret: `rx=a55a00ff` means the host GENI RX path works, so the
   remaining problem is NVT/MISO/power.  `rx=00000000` with `rxfifo=0`
   means the host RX/FIFO path is wrong.
