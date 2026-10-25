@@ -1,0 +1,28 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -365,12 +365,10 @@
+ bool
+ SweetNovatekTouch::nvtBldCrcEnable()
+ {
+-	uint8_t value = 0;
+-	if (!readData(NVT_BLD_CRC_EN, &value, 1)) {
+-		IOLog("SWEET NVT: BLD CRC read failed\n");
+-		return false;
+-	}
+-	value |= 0x80u;
++	/* BLD_CRC_EN is write-mostly in bootloader mode, and the NVT reads
++	 * currently return no RX.  Set the enable bit directly instead of
++	 * doing a read-modify-write that cannot succeed. */
++	uint8_t value = 0x80u;
+ 	if (!writeBuffer(NVT_BLD_CRC_EN, &value, 1)) {
+ 		IOLog("SWEET NVT: BLD CRC enable failed\n");
+ 		return false;
+@@ -459,7 +457,7 @@
+ 		return false;
+ 	}
+ 	if (!nvtCheckResetState(0xa0u)) {
+-		return false;
++		IOLog("SWEET NVT: reset state unreadable; continuing\n");
+ 	}
+ 	return true;
+ }
