@@ -1,0 +1,74 @@
+--- a/xnu/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/xnu/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -83,9 +83,23 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(4000);
+-
+-	if (!readFwInfo()) {
+-		IOLog("SWEET NVT: FWINFO read failed; continuing\n");
++	if (nvtEngReset()) {
++		IOLog("SWEET NVT: eng reset sent\n");
++	} else {
++		IOLog("SWEET NVT: eng reset failed; continuing\n");
++	}
++	IODelay(10000);
++	bool fwOk = false;
++	for (uint32_t attempt = 0; attempt < 3; attempt++) {
++		if (readFwInfo()) {
++			fwOk = true;
++			break;
++		}
++		IOLog("SWEET NVT: FWINFO retry %u\n", attempt + 1);
++		IODelay(10000);
++	}
++	if (!fwOk) {
++		IOLog("SWEET NVT: FWINFO read failed after 3 tries; continuing\n");
+ 	}
+ 
+ 	fWorkLoop = IOWorkLoop::workLoop();
+@@ -162,6 +176,33 @@
+ 	};
+ 	return fSPI->spiTransfer(tx, NULL, sizeof(tx), NVT_SPI_HZ, 0, 0, 8) ==
+ 	    kIOReturnSuccess;
++}
++
++bool
++SweetNovatekTouch::writeData(uint32_t addr, uint8_t value)
++{
++	if (!pageSet(addr)) {
++		return false;
++	}
++	uint8_t tx[2] = {
++		(uint8_t)(addr & 0x7f), value
++	};
++	return fSPI->spiTransfer(tx, NULL, sizeof(tx), NVT_SPI_HZ, 0, 0, 8) ==
++	    kIOReturnSuccess;
++}
++
++bool
++SweetNovatekTouch::nvtEngReset()
++{
++	/* Linux nvt_eng_reset(): write 0x5A to ENG_RST_ADDR (0x7FFF80)
++	 * before the 10 ms POR wait.  Without this the controller may stay
++	 * in its previous host-interface state and drive no MISO. */
++	if (!writeData(0x7fff80u, 0x5au)) {
++		IOLog("SWEET NVT: eng reset write failed\n");
++		return false;
++	}
++	IODelay(1000);
++	return true;
+ }
+ 
+ bool
+--- a/xnu/iokit/Kernel/arm/SweetNovatekTouch.h
++++ b/xnu/iokit/Kernel/arm/SweetNovatekTouch.h
+@@ -27,6 +27,8 @@
+ 	static void pollFired(OSObject *owner, IOTimerEventSource *sender);
+ 	bool findProviders();
+ 	bool pageSet(uint32_t addr);
++	bool writeData(uint32_t addr, uint8_t value);
++	bool nvtEngReset();
+ 	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
+ 	bool readFwInfo();
+ 	void poll();
