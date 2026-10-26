@@ -1,0 +1,43 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -20,6 +20,7 @@
+ #include <pexpert/pexpert.h>
+ 
+ static bool sManualCsTried = false;
++static bool sMisoTried = false;
+ 
+ #define SPI_SE_BASE             0x00c84000u
+ 
+@@ -331,6 +332,16 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 
+ 	SweetTLMM *tlmm = OSDynamicCast(SweetTLMM, fTLMMService);
+ 	bool manualCs = false;
++	bool sampleMiso = (tx != NULL && rx != NULL && cs == 0 &&
++	    tlmm != NULL && !sMisoTried);
++	if (sampleMiso) {
++		/* Route34: sample MISO (GPIO25) before CS is asserted. */
++		sMisoTried = true;
++		tlmm->setMux(25, 0);
++		tlmm->setPad(25, 0, 0, false);
++		IOLog("SWEET SPI: MISO idle gpio25=%u irq39=%u\n",
++		    tlmm->gpioRead(25), tlmm->gpioRead(39));
++	}
+ 	if (tx != NULL && rx != NULL && cs == 0 && tlmm != NULL && !sManualCsTried) {
+ 		/* Route33: bypass QUP CS0 once and hold it low as GPIO26. */
+ 		sManualCsTried = true;
+@@ -340,6 +351,14 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 		manualCs = true;
+ 		IOLog("SWEET SPI: manual CS0 low for full-duplex\n");
+ 	}
++	if (sampleMiso) {
++		if (manualCs) {
++			IOLog("SWEET SPI: MISO CS-low gpio25=%u irq39=%u\n",
++			    tlmm->gpioRead(25), tlmm->gpioRead(39));
++		}
++		tlmm->setMux(25, 3);
++		tlmm->setPad(25, 0, 3, false);
++	}
+ 
+ 	if (fXferCount++ < 8) {
+ 		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
