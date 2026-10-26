@@ -1,0 +1,116 @@
+diff --git a/iokit/Kernel/arm/SweetPlatform.cpp b/iokit/Kernel/arm/SweetPlatform.cpp
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -127,15 +127,16 @@ SweetTLMM::stop(IOService *provider)
+ uint32_t
+ SweetTLMM::pinControl(uint32_t pin) const
+ {
+-	/* P0 windows only: SE18 (23-26), touch IRQ (39), VDDIO (100),
+-	 * panel ENP/ENN (114/115).  Other pins are added with their consumers. */
++	/* P0 windows only: SE18 (23-26), touch IRQ (39), NVT reset (75),
++	 * VDDIO (100), panel ENP/ENN (114/115).  Other pins are added with
++	 * their consumers. */
+ 	if (pin >= 23 && pin <= 26) {
+ 		return SWEET_TLMM_EAST + SWEET_TLMM_PIN_STRIDE * pin;
+ 	}
+ 	if (pin == 39) {
+ 		return SWEET_TLMM_NORTH + SWEET_TLMM_PIN_STRIDE * pin;
+ 	}
+-	if (pin == 100 || pin == 114 || pin == 115) {
++	if (pin == 75 || pin == 100 || pin == 114 || pin == 115) {
+ 		return SWEET_TLMM_SOUTH + SWEET_TLMM_PIN_STRIDE * pin;
+ 	}
+ 	return 0;
+diff --git a/iokit/Kernel/arm/SweetNovatekTouch.h b/iokit/Kernel/arm/SweetNovatekTouch.h
+--- a/iokit/Kernel/arm/SweetNovatekTouch.h
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h
+@@ -38,6 +38,8 @@ private:
+ 	bool nvtFwCrcEnable();
+ 	bool nvtBootReady();
+ 	bool nvtCheckResetState(uint8_t state);
++	bool nvtSampleMiso(const char *tag);
++	bool nvtReset75Pulse();
+ 	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
+ 	bool readFwInfo();
+ 	void poll();
+diff --git a/iokit/Kernel/arm/SweetNovatekTouch.cpp b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -33,6 +33,7 @@
+ #define NVT_MAX_FINGERS          10u
+ #define NVT_IRQ_GPIO             39u
+ #define NVT_VDDIO_GPIO           100u
++#define NVT_RESET_GPIO           75u
+ #define NVT_SPI_HZ               9600000u
+ #define NVT_FW_CHUNK             4096u
+ #define NVT_BLD_CRC_EN           0x03f30eu
+@@ -108,12 +109,16 @@ SweetNovatekTouch::start(IOService *provider)
+ 	IODelay(4000);
+ 	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u before power cycle\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
++	nvtSampleMiso("pre-reset75");
++	nvtReset75Pulse();
++	nvtSampleMiso("post-reset75");
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, false);
+ 	IODelay(10000);
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
+ 	IODelay(4000);
+ 	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u after power cycle\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
++	nvtSampleMiso("post-vddio");
+ 	OSData *fwBlob = OSDynamicCast(OSData,
+ 	    provider->getProperty("novatek,firmware"));
+ 	bool fwLoaded = false;
+@@ -424,6 +429,52 @@ SweetNovatekTouch::nvtCheckResetState(uint8_t state)
+ 	return false;
+ }
+ 
++bool
++SweetNovatekTouch::nvtSampleMiso(const char *tag)
++{
++	if (fTLMM == NULL) {
++		return false;
++	}
++	/* Sample the MISO pad as GPIO with no pull, then with a pull-up.  A
++	 * floating net reads 1 with the pull-up; a net held low or driven low
++	 * reads 0 both times. */
++	fTLMM->setMux(25, 0);
++	fTLMM->setPad(25, 0, 0, false);
++	IODelay(1000);
++	bool input = fTLMM->gpioRead(25);
++	fTLMM->setPad(25, 3, 0, false);
++	IODelay(1000);
++	bool pullup = fTLMM->gpioRead(25);
++	IOLog("SWEET NVT: MISO %s gpio25=%u pullup=%u irq39=%u\n",
++	    tag, input, pullup, fTLMM->gpioRead(39));
++	fTLMM->setMux(25, 3);
++	fTLMM->setPad(25, 0, 3, false);
++	return input;
++}
++
++bool
++SweetNovatekTouch::nvtReset75Pulse()
++{
++	if (fTLMM == NULL) {
++		return false;
++	}
++	/* DTS has novatek,reset-gpio commented out, but GPIO75 is the only
++	 * candidate reset line.  Pulse it low/high and leave it pulled up. */
++	fTLMM->setMux(75, 0);
++	fTLMM->setPad(75, 3, 0, false);
++	IODelay(1000);
++	IOLog("SWEET NVT: reset75 idle=%u\n", fTLMM->gpioRead(75));
++	fTLMM->setPad(75, 0, 3, true);
++	fTLMM->gpioWrite(75, false);
++	IODelay(10000);
++	fTLMM->gpioWrite(75, true);
++	IODelay(10000);
++	fTLMM->setMux(75, 0);
++	fTLMM->setPad(75, 3, 0, false);
++	IOLog("SWEET NVT: reset75 pulse done in=%u\n", fTLMM->gpioRead(75));
++	return true;
++}
++
+ bool
+ SweetNovatekTouch::loadFirmwareBlob(const void *data, uint32_t len)
+ {
