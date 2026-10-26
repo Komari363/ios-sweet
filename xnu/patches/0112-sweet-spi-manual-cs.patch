@@ -1,0 +1,64 @@
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -19,6 +19,8 @@
+ #include <IOKit/IOMapTypes.h>
+ #include <pexpert/pexpert.h>
+ 
++static bool sManualCsTried = false;
++
+ #define SPI_SE_BASE             0x00c84000u
+ 
+ #define GENI_SER_M_CLK_CFG      0x048u
+@@ -326,6 +328,19 @@
+ 	if (!configurePins(true) || !configureClock()) {
+ 		return kIOReturnNotReady;
+ 	}
++
++	SweetTLMM *tlmm = OSDynamicCast(SweetTLMM, fTLMMService);
++	bool manualCs = false;
++	if (tx != NULL && rx != NULL && cs == 0 && tlmm != NULL && !sManualCsTried) {
++		/* Route33: bypass QUP CS0 once and hold it low as GPIO26. */
++		sManualCsTried = true;
++		tlmm->setMux(26, 0);
++		tlmm->setPad(26, 0, 3, true);
++		tlmm->gpioWrite(26, false);
++		manualCs = true;
++		IOLog("SWEET SPI: manual CS0 low for full-duplex\n");
++	}
++
+ 	if (fXferCount++ < 8) {
+ 		IOLog("SWEET SPI: xfer len=%u cs=%u hz=%u fifo=%ux%u\n",
+ 		    len, cs, hz, fFifoDepth, fFifoWidth);
+@@ -349,7 +364,21 @@
+ 
+ 	uint32_t opcode = (tx != NULL && rx != NULL) ? SPI_FULL_DUPLEX :
+ 	    (tx != NULL ? SPI_TX_ONLY : SPI_RX_ONLY);
++	if (manualCs) {
++		IOLog("SWEET SPI: fd pre mcmd=0x%x txlen=0x%x rxlen=0x%x cfg=0x%x demux=0x%x irq=0x%x rxst=0x%x\n",
++		    readReg(GENI_M_CMD0), readReg(SPI_TX_TRANS_LEN),
++		    readReg(SPI_RX_TRANS_LEN), readReg(SPI_TRANS_CFG),
++		    readReg(SPI_DEMUX_SEL), readReg(GENI_M_IRQ_STATUS),
++		    readReg(GENI_RX_FIFO_STATUS));
++	}
+ 	writeReg(GENI_M_CMD0, opcode << 27);
++	if (manualCs) {
++		IOLog("SWEET SPI: fd post mcmd=0x%x txlen=0x%x rxlen=0x%x cfg=0x%x demux=0x%x irq=0x%x rxst=0x%x\n",
++		    readReg(GENI_M_CMD0), readReg(SPI_TX_TRANS_LEN),
++		    readReg(SPI_RX_TRANS_LEN), readReg(SPI_TRANS_CFG),
++		    readReg(SPI_DEMUX_SEL), readReg(GENI_M_IRQ_STATUS),
++		    readReg(GENI_RX_FIFO_STATUS));
++	}
+ 
+ 	const uint8_t *txb = (const uint8_t *)tx;
+ 	uint32_t tx_off = 0;
+@@ -431,6 +460,10 @@
+ 	}
+ 	writeReg(GENI_M_IRQ_CLEAR, irq);
+ 	writeReg(GENI_TX_WATERMARK, 0);
++	if (manualCs && tlmm != NULL) {
++		tlmm->gpioWrite(26, true);
++		IOLog("SWEET SPI: manual CS0 released\n");
++	}
+ 	return kIOReturnSuccess;
+ }
+ 
