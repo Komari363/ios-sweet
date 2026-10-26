@@ -1,0 +1,17 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -49,9 +49,9 @@
+-/* novatek_nt36523_fw01.bin, parsed with the Linux nvt_bin_header_parser:
++/* novatek_nt36523_fw02.bin, parsed with the Linux nvt_bin_header_parser:
+  * ILM, DLM, and the two 255-byte header records.  CRCs are the values from
+  * the firmware header (hardware CRC path, hw_crc=2). */
+ static const SweetNvtFwPart kNvtFwParts[] = {
+-	{ 0x00000u, 0x00200u, 106127u, 0xdf90f936u },
+-	{ 0x20000u, 0x22000u,  49527u, 0xe25fc71du },
+-	{ 0x2c178u, 0x00000u,    255u, 0x5a9c9b73u },
+-	{ 0x2c278u, 0x00100u,    255u, 0x799fc1a9u },
++	{ 0x00000u, 0x00200u, 106127u, 0x96c207f6u },
++	{ 0x20000u, 0x22000u,  49527u, 0x547ec733u },
++	{ 0x2c178u, 0x00000u,    255u, 0x42558bb4u },
++	{ 0x2c278u, 0x00100u,    255u, 0x5661d16eu },
+ };
