@@ -1,0 +1,121 @@
+diff --git a/iokit/Kernel/arm/SweetGeniSPI.cpp b/iokit/Kernel/arm/SweetGeniSPI.cpp
+index 0d5118d..daf1c03 100644
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp
+@@ -29,7 +29,11 @@ static bool sMisoTried = false;
+ #define GENI_STATUS             0x040u
+ #define GENI_IF_FIFO_DISABLE    0x064u
+ #define GENI_FW_REVISION        0x068u
++#define GENI_CLK_CTRL_RO        0x060u
+ #define GENI_CLK_SEL            0x07cu
++#define GENI_CFG_REG80          0x240u
++#define GENI_M_GP_LENGTH        0x910u
++#define GENI_S_GP_LENGTH        0x914u
+ 
+ #define SPI_CPHA                0x224u
+ #define SPI_LOOPBACK            0x22cu
+@@ -37,6 +41,7 @@ static bool sMisoTried = false;
+ #define SPI_DEMUX_OUTPUT_INV    0x24cu
+ #define SPI_DEMUX_SEL           0x250u
+ #define SPI_TRANS_CFG           0x25cu
++#define SPI_TRANS_CFG_CS_TOGGLE 1u
+ #define SPI_WORD_LEN            0x268u
+ #define SPI_TX_TRANS_LEN        0x26cu
+ #define SPI_RX_TRANS_LEN        0x270u
+@@ -101,6 +106,20 @@ static bool sMisoTried = false;
+ #define SPI_PACK0               0x0007f8feu
+ #define SPI_PACK1               0x000ffefeu
+ 
++/*
++ * GENI_CFG_REG80 selects the pad used for receive data.  Linux writes this
++ * for the SPI-slave cross-connect; the ABL leaves a value that does not
++ * route MISO into the RX FIFO, which is consistent with TX-only completion
++ * and an empty RX FIFO.  Keep the Linux bit pattern for the route38 host
++ * RX check.
++ */
++#define GENI_IO1_SEL_TX             (1u << 2)
++#define GENI_IO2_DATA_IN_SEL_PAD2   (3u << 10)
++#define GENI_IO3_DATA_IN_SEL_PAD2   (1u << 15)
++#define GENI_CFG80_SPI_RX           (GENI_IO1_SEL_TX | \
++                                     GENI_IO2_DATA_IN_SEL_PAD2 | \
++                                     GENI_IO3_DATA_IN_SEL_PAD2)
++
+ #define SPI_IRQ_DONE            (1u << 0)
+ #define SPI_IRQ_ERRORS          ((1u << 1) | (1u << 2) | (1u << 3) | \
+                                  (1u << 24) | (1u << 25) | \
+@@ -425,6 +444,7 @@ SweetGeniSPI::configureSE()
+ 	    readReg(GENI_DMA_GENERAL_CFG) | 0x0fu);
+ 	writeReg(GENI_OUTPUT_CTRL, 0x7fu);
+ 	writeReg(GENI_FORCE_DEFAULT_REG, 1);
++	writeReg(GENI_CFG_REG80, GENI_CFG80_SPI_RX);
+ 	writeReg(GENI_BYTE_GRAN, 0);
+ 	writeReg(GENI_TX_PACKING_CFG0, SPI_PACK0);
+ 	writeReg(GENI_TX_PACKING_CFG1, SPI_PACK1);
+@@ -441,6 +461,10 @@ SweetGeniSPI::configureSE()
+ 	    readReg(GENI_FW_REVISION), readReg(GENI_IF_FIFO_DISABLE),
+ 	    readReg(GENI_CGC_CTRL), readReg(GENI_OUTPUT_CTRL),
+ 	    readReg(GENI_FORCE_DEFAULT_REG), readReg(GENI_BYTE_GRAN));
++	IOLog("SWEET SPI: SE rx route cfg80=0x%x trans=0x%x clkro=0x%x mgp=%u sgp=%u\n",
++	    readReg(GENI_CFG_REG80), readReg(SPI_TRANS_CFG),
++	    readReg(GENI_CLK_CTRL_RO), readReg(GENI_M_GP_LENGTH),
++	    readReg(GENI_S_GP_LENGTH));
+ 	IOLog("SWEET SPI: SE init pack=0x%x/0x%x/0x%x/0x%x irqen=0x%x serirq=0x%x gsi=0x%x s_irq=0x%x rxwm=%u/%u status=0x%x\n",
+ 	    readReg(GENI_TX_PACKING_CFG0), readReg(GENI_TX_PACKING_CFG1),
+ 	    readReg(GENI_RX_PACKING_CFG0), readReg(GENI_RX_PACKING_CFG1),
+@@ -564,7 +588,9 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	writeReg(SPI_CPOL, 0);
+ 	writeReg(SPI_DEMUX_OUTPUT_INV, 0);
+ 	writeReg(SPI_DEMUX_SEL, cs & 0xf);
+-	writeReg(SPI_TRANS_CFG, 0);
++	uint32_t transCfg = readReg(SPI_TRANS_CFG);
++	transCfg &= ~SPI_TRANS_CFG_CS_TOGGLE;
++	writeReg(SPI_TRANS_CFG, transCfg);
+ 	writeReg(SPI_WORD_LEN, (bpw - 4u) & 0x3ffu);
+ 	writeReg(SPI_DELAY_COUNTERS, 0);
+ 
+@@ -586,6 +612,7 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 	 * latched M_TX_FIFO_RD_ERR.  This ordering is the remaining difference
+ 	 * between the two experiments.
+ 	 */
++	writeReg(GENI_CFG_REG80, GENI_CFG80_SPI_RX);
+ 	writeReg(GENI_M_CMD0, opcode << 27);
+ 	if (fXferCount == 1) {
+ 		IOLog("SWEET SPI: cmd start mcmd=0x%x status=0x%x txfifo=0x%x twm=0x%x\n",
+@@ -698,10 +725,34 @@ SweetGeniSPI::transferLocked(const void *tx, void *rx, UInt32 len, UInt32 hz,
+ 				return kIOReturnIOError;
+ 			}
+ 			if (irq & SPI_IRQ_DONE) {
++				/*
++				 * M_CMD_DONE can be visible before the last RX
++				 * word reaches the FIFO.  Linux never treats
++				 * CMD_DONE as an RX terminator; give the RX
++				 * path a 10 ms grace window before declaring
++				 * the transfer empty.
++				 */
++				uint32_t grace = 0;
++				while (wc == 0 && grace < 1000) {
++					IODelay(10);
++					wc = readReg(GENI_RX_FIFO_STATUS) & 0x01ffffffu;
++					grace++;
++				}
++				if (wc != 0) {
++					for (uint32_t w = 0; w < wc && rx_off < len; w++) {
++						uint32_t word = readReg(GENI_RX_FIFO);
++						for (uint32_t b = 0; b < 4 && rx_off < len; b++) {
++							rxb[rx_off++] = (uint8_t)(word >> (8 * b));
++						}
++					}
++					continue;
++				}
+ 				if (fRxDiagCount++ < 4) {
+-					IOLog("SWEET SPI: rx empty len=%u got=%u rxfifo=0x%x mirq=0x%x geni=0x%x\n",
++					IOLog("SWEET SPI: rx empty len=%u got=%u rxfifo=0x%x mirq=0x%x geni=0x%x mgp=%u sgp=%u cfg80=0x%x trans=0x%x\n",
+ 					    len, rx_off, readReg(GENI_RX_FIFO_STATUS),
+-					    irq, readReg(GENI_STATUS));
++					    irq, readReg(GENI_STATUS),
++					    readReg(GENI_M_GP_LENGTH), readReg(GENI_S_GP_LENGTH),
++					    readReg(GENI_CFG_REG80), readReg(SPI_TRANS_CFG));
+ 				}
+ 				break;
+ 			}
+

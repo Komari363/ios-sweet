@@ -1268,3 +1268,24 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   Next candidate (not implemented): require only M_AHB + SE18, or skip the
   AHB halt wait entirely, then enter `configureSE()`/SPI and see whether
   `xfer len=3` appears. Do not re-boot route19.
+
+## 2026-10-26 22:35 route38: host RX / Linux SPI parity
+
+- Human evidence: Android, TWRP and WoA all have working touch. The NVT
+  hardware, power and MISO net are therefore usable; route34-37's static
+  MISO=0 reading is invalid because an SPI slave only drives MISO while SCK
+  is toggling. The reset/power generation is closed as a wrong premise.
+- New `sweet-touch-spi-cmd` generation: route38 = 0/3, host RX only.
+- `0117-sweet-geni-host-rx-parity.patch`:
+  - writes `GENI_CFG_REG80 = IO1_SEL_TX | IO2_DATA_IN_SEL_PAD2 |
+    IO3_DATA_IN_SEL_PAD2` (Linux `spi_slv_setup()` value; this driver never
+    wrote the register before);
+  - preserves non-`CS_TOGGLE` bits in `SPI_TRANS_CFG` instead of writing 0;
+  - after `M_CMD_DONE`, polls RX FIFO for up to 10 ms before declaring the
+    transfer empty (Linux does not terminate RX on CMD_DONE);
+  - logs `M_GP_LENGTH`, `S_GP_LENGTH`, `GENI_CFG_REG80` and
+    `SPI_TRANS_CFG` on the empty-RX path.
+- Not built, not booted. Do not claim this is a fix until the ring shows
+  `got>0`, `fw=` or `packets`; otherwise use the new register readbacks to
+  choose route39.
+
