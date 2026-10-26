@@ -20,10 +20,20 @@
   hardware panel reset, but nabu has no enabled NVT reset GPIO in its
   DTS.  Without SWRST_N8 the part can remain in application mode, making
   every bootloader SRAM write a no-op.  The 0x50 host-command fix is kept.
-- route40 (`0119`): restore Linux `nvt_eng_reset()` (`0x5A` to
-  `0x7FFF80`), `SWRST_N8=0x69`, wait 5 ms, disable SPI_RD_FAST, then read
-  chip trim as a decisive bootloader probe; keep 0x50 for the firmware
-  CRC host command.  Patch generated; build/boot pending.
+- route40 (`0119`, `d3150da`): CI `40374316246` success; image
+  `00cd1bbe...`; booted 02:16:39.  Ring `1fa42501...` (total 194,220,
+  flush #29): `bootloader reset 0x69 sent` appears, then the chip-trim
+  read (before any SRAM write) is `rx empty len=8 got=0 rxfifo=0x0
+  cfg80=0x8c04 trans=0x0`, `short rx len=8`, `bootloader chip trim read
+  failed`.  No `reset state a0`, no `fw=`, no `packets`.  route40 = 3/3.
+- **route38/39/40 = 1/3, 2/3, 3/3; `sweet-touch-spi-cmd` current
+  generation is exhausted.**  Stop per AGENTS §4.1.  The route25
+  internal loopback was also empty but is inconclusive (QUP may not
+  implement SPI_LOOPBACK usefully), so the next generation needs a real
+  host-RX measurement (scope on GPIO25/CS/CLK or a known-good NVT
+  module), not another firmware-tail permutation.
+- 300 s delayed reset worked on route40: auto-reset at 02:23:02 to TWRP
+  b, TWRP→fastboot, ring at 02:24:25.  A3 is dirty after the rw mount.
 
 ## 2026-10-27 01:15 — route38 result and route39 firmware parity
 
