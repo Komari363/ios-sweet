@@ -1,0 +1,11 @@
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -20,7 +20,7 @@
+ 
+ #define SWEET_TLMM_EAST          0x00500000u
+ #define SWEET_TLMM_NORTH         0x00900000u
+-#define SWEET_TLMM_SOUTH         0x00000000u
++#define SWEET_TLMM_SOUTH         0x00D00000u
+ #define SWEET_TLMM_PIN_STRIDE    0x1000u
+ #define SWEET_TLMM_MUX_MASK      0x0000003cu
+ #define SWEET_TLMM_MUX_SHIFT     2
