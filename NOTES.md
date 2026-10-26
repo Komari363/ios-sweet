@@ -11,10 +11,18 @@
   `6e47a5fd...`; A3 351.734 s; ring `4e9305f0...`.  Manual CS0 low is
   executed, but all RX remains empty; `short rx len=8 got=0`.
   route33 = 2/3.
-- route34 (`0113`, `ee743ef`): samples GPIO25 (MISO) before and during
-  manual CS, and GPIO39 IRQ, then restores QUP18 mux.  CI `40306155570`.
-- Next: build route34 image with fw02 ADT, probe → TWRP→fastboot → A3 →
-  boot once → ring.  This is the last attempt of the current generation.
+- route34 (`0113`, `3f12f88`): samples GPIO25 (MISO) before and during
+  manual CS, and GPIO39 IRQ, then restores QUP18 mux.  First `0113`
+  (`ee743ef`) failed CI patch context because the actual source still had
+  `gSpiTimeoutLogs` before `sManualCsTried`; corrected patch applied.
+  CI `40315434171` success (9m06s); image `61d5c757...`, 17,068,032 B.
+  A3 347.159 s; boot 19:59:55; TWRP 20:05:48; ring `4a941735...`.
+  Ring: `vddio in=1 out=1`; **`MISO idle gpio25=0 irq39=0`**;
+  **`MISO CS-low gpio25=0 irq39=0`**; reset state `00`, firmware load
+  complete, FWINFO 3 failures; no `fw=`/`packets`.
+  route34 = 3/3; fw02 generation exhausted.  VDDIO is high but NVT does
+  not drive MISO/IRQ, so next suspect is NVT reset/power or MISO net/pin,
+  not host RX FIFO alone.  Stop; human reset needed.
 
 ## 2026-10-26 16:21 — route29/30/31: fw02 and TLMM South fix
 
