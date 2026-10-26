@@ -1,5 +1,28 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-27 03:25 — static clean baseline patch (no boot)
+
+- Root docs frozen first: `665b37b` (`docs(touch): freeze static audit and fix
+  reset-state length`).  The audit now records D2b (manual-CS error paths) and
+  D8 (chip-trim old-address fallback).
+- `0120-sweet-touch-clean-baseline.patch` is a **static cleanup only**:
+  - remove the master-path `GENI_CFG_REG80` writes; leave the bootloader
+    default and keep the value in the SE log;
+  - remove the permanent manual-CS/MISO probes from `transferLocked()`, so a
+    failed probe cannot leave CS low or `fPinsReady` stale;
+  - keep the wrapper `GENI_IRQ_EN=0` (polling only), no external IRQ mask;
+  - reset-state reads 5 data bytes and checks `info[0]`;
+  - chip-trim falls back to `0x1F64E`; chip-trim and reset-state failures abort
+    before/without claiming firmware success;
+  - firmware load is disabled by default and now requires **both**
+    `sweetnvt_fw=1` and `sweetnvt_fwload=1`.  The old route40 CMDLINE only has
+    `sweetnvt_fw=1`, so it stays inert; a clean build must omit both.
+- Validation: patch applies to the route40 CI buildtree and the two changed
+  C++ files pass `xnu-cc.py` syntax check (`0 of 2 files failed`).  No image
+  built, no boot, no partition write.
+- Next: build the clean baseline without firmware injection; do not boot until
+  the human resets STATE and A3 is reflashed.
+
 ## 2026-10-27 02:00 — route39 result; route40 bootloader reset + host-cmd
 
 - route39 (`0118`, `4d259a8`): CI `40369696729` success; image

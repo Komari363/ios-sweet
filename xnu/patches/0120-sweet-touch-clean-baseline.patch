@@ -1,0 +1,328 @@
+diff -ruN old/iokit/Kernel/arm/SweetGeniSPI.cpp new/iokit/Kernel/arm/SweetGeniSPI.cpp
+--- a/iokit/Kernel/arm/SweetGeniSPI.cpp	2026-10-26 22:34:46.487547400 +0800
++++ b/iokit/Kernel/arm/SweetGeniSPI.cpp	2026-10-27 03:18:06.101878400 +0800
+@@ -20,8 +20,6 @@
+ #include <pexpert/pexpert.h>
+ 
+ static uint32_t gSpiTimeoutLogs = 0;
+-static bool sManualCsTried = false;
+-static bool sMisoTried = false;
+ 
+ #define SPI_SE_BASE             0x00c84000u
+ 
+@@ -80,16 +78,9 @@
+ 
+ /*
+  * SE_IRQ_EN (0xe1c) is the wrapper-level enable for the GENI/DMA interrupt
+- * lines.  geni_se_io_set_mode() sets all four bits after geni_se_irq_clear()
+- * has zeroed the register; route13/14 zeroed it and never restored it.
++ * lines.  This driver has no GIC handler and polls GENI_M_IRQ_STATUS, so the
++ * wrapper lines must stay disabled; only the local GENI M_IRQ_EN mask is used.
+  */
+-#define GENI_DMA_TX_IRQ_EN      (1u << 0)
+-#define GENI_DMA_RX_IRQ_EN      (1u << 1)
+-#define GENI_M_IRQ_EN_BIT       (1u << 2)
+-#define GENI_S_IRQ_EN_BIT       (1u << 3)
+-#define GENI_SE_IRQ_EN_MASK     (GENI_DMA_TX_IRQ_EN | GENI_DMA_RX_IRQ_EN | \
+-                                 GENI_M_IRQ_EN_BIT | GENI_S_IRQ_EN_BIT)
+-
+ #define M_TX_FIFO_WATERMARK_EN  (1u << 30)
+ #define M_RX_FIFO_WATERMARK_EN  (1u << 26)
+ #define M_RX_FIFO_LAST_EN       (1u << 27)
+@@ -107,18 +98,10 @@
+ #define SPI_PACK1               0x000ffefeu
+ 
+ /*
+- * GENI_CFG_REG80 selects the pad used for receive data.  Linux writes this
+- * for the SPI-slave cross-connect; the ABL leaves a value that does not
+- * route MISO into the RX FIFO, which is consistent with TX-only completion
+- * and an empty RX FIFO.  Keep the Linux bit pattern for the route38 host
+- * RX check.
++ * GENI_CFG_REG80 is the SPI-slave pad cross-connect register.  Linux writes
++ * it only in spi_slv_setup(), and this driver is an SPI master; leave the
++ * bootloader default untouched.  The value is still read into the SE log.
+  */
+-#define GENI_IO1_SEL_TX             (1u << 2)
+-#define GENI_IO2_DATA_IN_SEL_PAD2   (3u << 10)
+-#define GENI_IO3_DATA_IN_SEL_PAD2   (1u << 15)
+-#define GENI_CFG80_SPI_RX           (GENI_IO1_SEL_TX | \
+-                                     GENI_IO2_DATA_IN_SEL_PAD2 | \
+-                                     GENI_IO3_DATA_IN_SEL_PAD2)
+ 
+ #define SPI_IRQ_DONE            (1u << 0)
+ #define SPI_IRQ_ERRORS          ((1u << 1) | (1u << 2) | (1u << 3) | \
+@@ -444,7 +427,6 @@
+ 	    readReg(GENI_DMA_GENERAL_CFG) | 0x0fu);
+ 	writeReg(GENI_OUTPUT_CTRL, 0x7fu);
+ 	writeReg(GENI_FORCE_DEFAULT_REG, 1);
+-	writeReg(GENI_CFG_REG80, GENI_CFG80_SPI_RX);
+ 	writeReg(GENI_BYTE_GRAN, 0);
+ 	writeReg(GENI_TX_PACKING_CFG0, SPI_PACK0);
+ 	writeReg(GENI_TX_PACKING_CFG1, SPI_PACK1);
+@@ -454,8 +436,6 @@
+ 	writeReg(GENI_RX_RFR_WATERMARK,
+ 	    fRxDepth > 2 ? fRxDepth - 2 : 0);
+ 	writeReg(GENI_TX_WATERMARK, 0);
+-	/* geni_se_io_set_mode(): keep the GENI/DMA interrupt lines enabled. */
+-	writeReg(GENI_IRQ_EN, GENI_SE_IRQ_EN_MASK);
+ 
+ 	IOLog("SWEET SPI: SE init fw=0x%x if=0x%x cgc=0x%x out=0x%x force=0x%x gran=0x%x\n",
+ 	    readReg(GENI_FW_REVISION), readReg(GENI_IF_FIFO_DISABLE),
+@@ -534,36 +514,6 @@
+ 		return kIOReturnNotReady;
+ 	}
+ 
+-	SweetTLMM *tlmm = OSDynamicCast(SweetTLMM, fTLMMService);
+-	bool manualCs = false;
+-	bool sampleMiso = (tx != NULL && rx != NULL && cs == 0 &&
+-	    tlmm != NULL && !sMisoTried);
+-	if (sampleMiso) {
+-		/* Route34: sample MISO (GPIO25) before CS is asserted. */
+-		sMisoTried = true;
+-		tlmm->setMux(25, 0);
+-		tlmm->setPad(25, 0, 0, false);
+-		IOLog("SWEET SPI: MISO idle gpio25=%u irq39=%u\n",
+-		    tlmm->gpioRead(25), tlmm->gpioRead(39));
+-	}
+-	if (tx != NULL && rx != NULL && cs == 0 && tlmm != NULL && !sManualCsTried) {
+-		/* Route33: bypass QUP CS0 once and hold it low as GPIO26. */
+-		sManualCsTried = true;
+-		tlmm->setMux(26, 0);
+-		tlmm->setPad(26, 0, 3, true);
+-		tlmm->gpioWrite(26, false);
+-		manualCs = true;
+-		IOLog("SWEET SPI: manual CS0 low for full-duplex\n");
+-	}
+-	if (sampleMiso) {
+-		if (manualCs) {
+-			IOLog("SWEET SPI: MISO CS-low gpio25=%u irq39=%u\n",
+-			    tlmm->gpioRead(25), tlmm->gpioRead(39));
+-		}
+-		tlmm->setMux(25, 3);
+-		tlmm->setPad(25, 0, 3, false);
+-	}
+-
+ 	if (fXferCount == 0) {
+ 		IOLog("SWEET SPI: pre status=0x%x irq=0x%x en=0x%x ctrl=0x%x mcmd=0x%x txfifo=0x%x rxfifo=0x%x\n",
+ 		    readReg(GENI_STATUS), readReg(GENI_M_IRQ_STATUS),
+@@ -612,7 +562,6 @@
+ 	 * latched M_TX_FIFO_RD_ERR.  This ordering is the remaining difference
+ 	 * between the two experiments.
+ 	 */
+-	writeReg(GENI_CFG_REG80, GENI_CFG80_SPI_RX);
+ 	writeReg(GENI_M_CMD0, opcode << 27);
+ 	if (fXferCount == 1) {
+ 		IOLog("SWEET SPI: cmd start mcmd=0x%x status=0x%x txfifo=0x%x twm=0x%x\n",
+@@ -811,10 +760,6 @@
+ 	}
+ 	writeReg(GENI_M_IRQ_CLEAR, irq);
+ 	writeReg(GENI_TX_WATERMARK, 0);
+-	if (manualCs && tlmm != NULL) {
+-		tlmm->gpioWrite(26, true);
+-		IOLog("SWEET SPI: manual CS0 released\n");
+-	}
+ 	if (rxb != NULL && rx_off != len) {
+ 		IOLog("SWEET SPI: short rx len=%u got=%u\n", len, rx_off);
+ 		return kIOReturnIOError;
+diff -ruN old/iokit/Kernel/arm/SweetNovatekTouch.cpp new/iokit/Kernel/arm/SweetNovatekTouch.cpp
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp	2026-10-27 02:02:18.258692700 +0800
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp	2026-10-27 03:21:23.046282900 +0800
+@@ -34,7 +34,6 @@
+ #define NVT_MAX_FINGERS          10u
+ #define NVT_IRQ_GPIO             39u
+ #define NVT_VDDIO_GPIO           100u
+-#define NVT_RESET_GPIO           75u
+ #define NVT_SPI_HZ               9600000u
+ #define NVT_FW_CHUNK             4096u
+ #define NVT_BLD_CRC_EN           0x03f30eu
+@@ -112,25 +111,35 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(10000);
+-	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u route40 swrst+host-cmd\n",
++	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u clean baseline\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO),
+ 	    fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 
+-	OSData *fwBlob = OSDynamicCast(OSData,
+-	    provider->getProperty("novatek,firmware"));
++	int fwEnable = 0;
++	int fwLoad = 0;
++	PE_parse_boot_argn("sweetnvt_fw", &fwEnable, sizeof(fwEnable));
++	PE_parse_boot_argn("sweetnvt_fwload", &fwLoad, sizeof(fwLoad));
++	bool fwRequested = (fwEnable != 0 && fwLoad != 0);
+ 	bool fwLoaded = false;
+-	if (fwBlob != NULL && fwBlob->getLength() > 0x1000) {
+-		IOLog("SWEET NVT: firmware blob %u bytes\n",
+-		    (unsigned)fwBlob->getLength());
+-		fwLoaded = loadFirmwareBlob(fwBlob->getBytesNoCopy(),
+-		    fwBlob->getLength());
+-		if (fwLoaded) {
+-			IOLog("SWEET NVT: firmware load complete\n");
++	if (fwRequested) {
++		OSData *fwBlob = OSDynamicCast(OSData,
++		    provider->getProperty("novatek,firmware"));
++		if (fwBlob != NULL && fwBlob->getLength() > 0x1000) {
++			IOLog("SWEET NVT: firmware blob %u bytes (sweetnvt_fw=%d sweetnvt_fwload=%d)\n",
++			    (unsigned)fwBlob->getLength(), fwEnable, fwLoad);
++			fwLoaded = loadFirmwareBlob(fwBlob->getBytesNoCopy(),
++			    fwBlob->getLength());
++			if (fwLoaded) {
++				IOLog("SWEET NVT: firmware load complete\n");
++			} else {
++				IOLog("SWEET NVT: firmware load failed; probing running firmware\n");
++			}
+ 		} else {
+-			IOLog("SWEET NVT: firmware load failed; probing running firmware\n");
++			IOLog("SWEET NVT: no firmware blob; probing running firmware\n");
+ 		}
+ 	} else {
+-		IOLog("SWEET NVT: no firmware blob; probing running firmware\n");
++		IOLog("SWEET NVT: firmware load disabled (sweetnvt_fw=%d sweetnvt_fwload=%d); probing running firmware\n",
++		    fwEnable, fwLoad);
+ 	}
+ 	(void)fwLoaded;
+ 	bool fwOk = false;
+@@ -265,7 +274,8 @@
+ 	}
+ 	IODelay(5000);
+ 	if (!writeData(0x03f310u, 0x00u)) {
+-		IOLog("SWEET NVT: SPI_RD_FAST disable failed; continuing\n");
++		IOLog("SWEET NVT: SPI_RD_FAST disable failed\n");
++		return false;
+ 	}
+ 	IODelay(5000);
+ 	IOLog("SWEET NVT: bootloader reset 0x69 sent\n");
+@@ -275,14 +285,20 @@
+ bool
+ SweetNovatekTouch::readChipTrim()
+ {
+-	/* Linux nvt_ts_check_chip_ver_trim(): CTP_SPI_READ(buf, 7) means
+-	 * command + 6 data bytes, total transfer 8. */
++	/* Linux nvt_ts_check_chip_ver_trim(): try CHIP_VER_TRIM_ADDR, then
++	 * CHIP_VER_TRIM_OLD_ADDR.  CTP_SPI_READ(buf, 7) means command + 6
++	 * data bytes, total transfer 8. */
+ 	uint8_t trim[6] = { 0 };
+-	if (!readData(0x03f004u, trim, sizeof(trim))) {
+-		return false;
++	uint32_t addr = 0x03f004u;
++	if (!readData(addr, trim, sizeof(trim))) {
++		addr = 0x01f64eu;
++		if (!readData(addr, trim, sizeof(trim))) {
++			IOLog("SWEET NVT: chip trim read failed at 0x3f004 and 0x1f64e\n");
++			return false;
++		}
+ 	}
+-	IOLog("SWEET NVT: chip trim %02x %02x %02x %02x %02x %02x\n",
+-	    (unsigned)trim[0], (unsigned)trim[1], (unsigned)trim[2],
++	IOLog("SWEET NVT: chip trim @0x%x %02x %02x %02x %02x %02x %02x\n",
++	    addr, (unsigned)trim[0], (unsigned)trim[1], (unsigned)trim[2],
+ 	    (unsigned)trim[3], (unsigned)trim[4], (unsigned)trim[5]);
+ 	return true;
+ }
+@@ -408,67 +424,24 @@
+ bool
+ SweetNovatekTouch::nvtCheckResetState(uint8_t state)
+ {
+-	uint8_t info[6] = { 0 };
++	/* Linux CTP_SPI_READ(buf, 6) is total 7, data 5; buf[1] is data[0].
++	 * readData(len) returns exactly len data bytes, so ask for 5 and
++	 * check info[0]. */
++	uint8_t info[5] = { 0 };
+ 	for (uint32_t i = 0; i < 50; i++) {
+ 		if (readData(NVT_RESET_STATE, info, sizeof(info))) {
+-			if (info[1] >= state && info[1] <= 0xafu) {
++			if (info[0] >= state && info[0] <= 0xafu) {
+ 				return true;
+ 			}
+ 		}
+ 		IODelay(10000);
+ 	}
+ 	IOLog("SWEET NVT: reset state %02x not reached (last %02x)\n",
+-	    (unsigned)state, (unsigned)info[1]);
++	    (unsigned)state, (unsigned)info[0]);
+ 	return false;
+ }
+ 
+ bool
+-SweetNovatekTouch::nvtSampleMiso(const char *tag)
+-{
+-	if (fTLMM == NULL) {
+-		return false;
+-	}
+-	/* Sample the MISO pad as GPIO with no pull, then with a pull-up.  A
+-	 * floating net reads 1 with the pull-up; a net held low or driven low
+-	 * reads 0 both times. */
+-	fTLMM->setMux(25, 0);
+-	fTLMM->setPad(25, 0, 0, false);
+-	IODelay(1000);
+-	bool input = fTLMM->gpioRead(25);
+-	fTLMM->setPad(25, 3, 0, false);
+-	IODelay(1000);
+-	bool pullup = fTLMM->gpioRead(25);
+-	IOLog("SWEET NVT: MISO %s gpio25=%u pullup=%u irq39=%u\n",
+-	    tag, input, pullup, fTLMM->gpioRead(39));
+-	fTLMM->setMux(25, 3);
+-	fTLMM->setPad(25, 0, 3, false);
+-	return input;
+-}
+-
+-bool
+-SweetNovatekTouch::nvtReset75Pulse()
+-{
+-	if (fTLMM == NULL) {
+-		return false;
+-	}
+-	/* DTS has novatek,reset-gpio commented out, but GPIO75 is the only
+-	 * candidate reset line.  Pulse it low/high and leave it pulled up. */
+-	fTLMM->setMux(75, 0);
+-	fTLMM->setPad(75, 3, 0, false);
+-	IODelay(1000);
+-	IOLog("SWEET NVT: reset75 idle=%u\n", fTLMM->gpioRead(75));
+-	fTLMM->setPad(75, 0, 3, true);
+-	fTLMM->gpioWrite(75, false);
+-	IODelay(10000);
+-	fTLMM->gpioWrite(75, true);
+-	IODelay(10000);
+-	fTLMM->setMux(75, 0);
+-	fTLMM->setPad(75, 3, 0, false);
+-	IOLog("SWEET NVT: reset75 pulse done in=%u\n", fTLMM->gpioRead(75));
+-	return true;
+-}
+-
+-bool
+ SweetNovatekTouch::loadFirmwareBlob(const void *data, uint32_t len)
+ {
+ 	const uint8_t *fw = (const uint8_t *)data;
+@@ -495,7 +468,8 @@
+ 	 * MISO), and SRAM writes below cannot be trusted.
+ 	 */
+ 	if (!readChipTrim()) {
+-		IOLog("SWEET NVT: bootloader chip trim read failed\n");
++		IOLog("SWEET NVT: bootloader chip trim read failed; aborting firmware load\n");
++		return false;
+ 	}
+ 	for (uint32_t i = 0; i < sizeof(kNvtFwParts) / sizeof(kNvtFwParts[0]); i++) {
+ 		uint32_t size = kNvtFwParts[i].size;
+@@ -549,7 +523,8 @@
+ 	bool resetStateOk = nvtCheckResetState(0xa0u);
+ 	IOLog("SWEET NVT: tail reset-state ret=%u\n", resetStateOk);
+ 	if (!resetStateOk) {
+-		IOLog("SWEET NVT: reset state unreadable; continuing\n");
++		IOLog("SWEET NVT: reset state unreadable; aborting firmware load\n");
++		return false;
+ 	}
+ 	return true;
+ }
+diff -ruN old/iokit/Kernel/arm/SweetNovatekTouch.h new/iokit/Kernel/arm/SweetNovatekTouch.h
+--- a/iokit/Kernel/arm/SweetNovatekTouch.h	2026-10-26 20:22:16.418960500 +0800
++++ b/iokit/Kernel/arm/SweetNovatekTouch.h	2026-10-27 03:18:33.941996300 +0800
+@@ -38,8 +38,6 @@
+ 	bool nvtFwCrcEnable();
+ 	bool nvtBootReady();
+ 	bool nvtCheckResetState(uint8_t state);
+-	bool nvtSampleMiso(const char *tag);
+-	bool nvtReset75Pulse();
+ 	bool readData(uint32_t addr, uint8_t *buf, uint32_t len);
+ 	bool readFwInfo();
+ 	void poll();
