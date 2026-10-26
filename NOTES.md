@@ -1,5 +1,28 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-26 16:21 — route29/30/31: fw02 and TLMM South fix
+
+- Human reset at 14:33: next generation = NVT fw02. `0108` (`30d39f1`)
+  switches `kNvtFwParts` CRCs to fw02; CI `40280780385` success; image
+  `a6201977...`, fw02 sha256 `343af7c6...`.
+- route29 (15:02): A3 340.835 s, ring `0876d8c9...`; 4 parts written,
+  `firmware load complete`, but reset state `00`, FWINFO no RX, no
+  `fw=`/`packets`. route29 = 1/3.
+- route30: `0109` (`5239cb7`) adds `gpioReadOutput` and logs both IO bits.
+  CI `40284334448`; A3 338.886 s; ring `f51a24f8...`.
+  `vddio in=0 out=0` before/after; output bit itself was 0. route30 = 2/3.
+- Static check: `SweetPlatform.cpp` had `SWEET_TLMM_SOUTH=0`; Linux SM8150
+  pinctrl uses South `0x00D00000` (`pinctrl-sm8150.c:28`), so GPIO100 was
+  written at `0x64000` instead of `0xd64000`.
+- route31: `0110` (`e45f5bc`) fixes South base; CI `40287933137`; A3 353.003 s;
+  ring `c6c038ce...` (`vddio in=1 out=1` before/after). 4 parts written, but
+  no `reset state`, no `firmware load complete`, no FWINFO, no
+  `fw=`/`packets`; later packet-read errors and `exec SpringBoard`.
+  route31 = 3/3; fw02 generation exhausted. Stop; human reset needed.
+- Next: instrument firmware-load tail after part 3 (`nvtBldCrcEnable`,
+  `nvtFwCrcEnable`, `nvtBootReady`, `nvtCheckResetState`) and check MISO/CS.
+  VDDIO is now confirmed high.
+
 ## 2026-10-26 00:49 — route28: NVT firmware loading from ADT
 
 - Human reset: route25/26/27 = 3/3; next generation is NVT firmware load.
