@@ -1,5 +1,26 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-27 01:15 — route38 result and route39 firmware parity
+
+- route38 (`0117`, `340b262`): CI `40355713691` success; image
+  `84c8e290...`; booted 00:21:09.  Touch still dead; ring
+  `8277dd19...`, parser `total 282447 bytes, flush #178`.
+  `cfg80=0x8c04`, `clkro=0x1`, `mgp=8/40`, `sgp=0`; after the
+  10 ms grace `rx empty got=0 rxfifo=0 mirq=0x48200081`.
+  No `fw=`/`packets`.  route38 = 1/3.
+- 300 s reset did not run because this image's CMDLINE had no
+  `sweetboot=1`; `0097` only arms the thread when the arg is present.
+- Static comparison with the working NT36672A SPI driver found that the
+  `0xAE` boot command belongs at `EVENT_MAP_HOST_CMD=0x50`, not the
+  handshake byte `0x51`.  route28-31 wrote `0x51`, so firmware CRC never
+  ran (reset state stayed `0x00`).  The working driver also does not
+  write `SWRST_N8=0x69` and does not cut VDDIO; it only disables
+  SPI_RD_FAST before writing SRAM.
+- route39 (`0118`): remove route35-37 power/reset sequence, drop 0x69,
+  move BLD CRC banks after the parts, write host command to 0x50, wait
+  50x10 ms for reset state.  Build with fw02 injected.  Patch dry-run
+  passed; not yet committed/built/booted.
+
 ## 2026-10-26 22:16 — route35/36/37: NVT reset/power exhausted
 
 - route35 (`0114`, `41ad392`): GPIO75 South support and MISO pull-up sample.

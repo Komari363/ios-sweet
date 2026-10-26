@@ -1,0 +1,194 @@
+﻿diff --git a/iokit/Kernel/arm/SweetNovatekTouch.cpp b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -27,6 +27,7 @@
+ #define NVT_EVENT_BUF            0x02fe00u
+ #define NVT_EVENT_FWINFO         0x78u
+ #define NVT_EVENT_RESET_STATE    0x60u
++#define NVT_EVENT_HOST_CMD       0x50u
+ #define NVT_EVENT_HANDSHAKE      0x51u
+ #define NVT_SWRST_N8             0x03f0feu
+ #define NVT_PACKET_LEN           65u
+@@ -98,85 +99,42 @@
+ 		return false;
+ 	}
+ 
+-	/* VDDIO is a GPIO100 fixed regulator; ABL normally leaves it on, but
+-	 * make the state explicit before the first SPI access. */
++	/*
++	 * Route39: the working NT36672A SPI driver relies on the hardware
++	 * panel reset and never toggles a NVT reset GPIO or VDDIO.  Keep
++	 * VDDIO high, do not power-cycle it, and do not drive GPIO75.
++	 * Route35/36/37 left reset75 high and cut VDDIO for 1 s before every
++	 * boot; that is not the Linux sequence and can leave the controller
++	 * in reset.  Only read the pin state here.
++	 */
+ 	fTLMM->setMux(NVT_VDDIO_GPIO, 0);
+ 	fTLMM->setPad(NVT_VDDIO_GPIO, 0, 3, true);
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
+ 	/* INT: GPIO input, pull-down; the controller drives it high. */
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+-	IODelay(4000);
+-	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u before power cycle\n",
+-	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+-	nvtSampleMiso("pre-route37");
+-	IOLog("SWEET NVT: MISO pad drive test\n");
+-	fTLMM->setMux(25, 0);
+-	fTLMM->setPad(25, 0, 3, true);
+-	fTLMM->gpioWrite(25, true);
+-	IODelay(1000);
+-	IOLog("SWEET NVT: MISO drive high read=%u\n", fTLMM->gpioRead(25));
+-	fTLMM->gpioWrite(25, false);
+-	IODelay(1000);
+-	IOLog("SWEET NVT: MISO drive low read=%u\n", fTLMM->gpioRead(25));
+-	fTLMM->setMux(25, 3);
+-	fTLMM->setPad(25, 0, 3, false);
++	IODelay(10000);
++	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u route39 no power cycle\n",
++	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO),
++	    fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 
+-	IOLog("SWEET NVT: power seq assert reset75\n");
+-	fTLMM->setMux(75, 0);
+-	fTLMM->setPad(75, 0, 3, true);
+-	fTLMM->gpioWrite(75, false);
+-	IODelay(100000);
+-	IOLog("SWEET NVT: power seq vddio off 1s\n");
+-	fTLMM->gpioWrite(NVT_VDDIO_GPIO, false);
+-	IODelay(1000000);
+-	IOLog("SWEET NVT: power seq vddio on\n");
+-	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
+-	IODelay(100000);
+-	IOLog("SWEET NVT: power seq release reset75\n");
+-	fTLMM->gpioWrite(75, true);
+-	IODelay(100000);
+-	fTLMM->setMux(75, 0);
+-	fTLMM->setPad(75, 3, 0, false);
+-	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u after power seq\n",
+-	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+-	nvtSampleMiso("post-route37");
+ 	OSData *fwBlob = OSDynamicCast(OSData,
+ 	    provider->getProperty("novatek,firmware"));
+ 	bool fwLoaded = false;
+ 	if (fwBlob != NULL && fwBlob->getLength() > 0x1000) {
+ 		IOLog("SWEET NVT: firmware blob %u bytes\n",
+ 		    (unsigned)fwBlob->getLength());
+-		if (nvtEngReset()) {
+-			IOLog("SWEET NVT: firmware eng reset sent\n");
+-		} else {
+-			IOLog("SWEET NVT: firmware eng reset failed; continuing\n");
+-		}
+-		IODelay(10000);
+ 		fwLoaded = loadFirmwareBlob(fwBlob->getBytesNoCopy(),
+ 		    fwBlob->getLength());
+ 		if (fwLoaded) {
+ 			IOLog("SWEET NVT: firmware load complete\n");
+ 		} else {
+-			IOLog("SWEET NVT: firmware load failed; fallback\n");
+-		}
+-	}
+-	if (!fwLoaded) {
+-		if (nvtEngReset()) {
+-			IOLog("SWEET NVT: eng reset sent\n");
+-		} else {
+-			IOLog("SWEET NVT: eng reset failed; continuing\n");
+-		}
+-		IODelay(10000);
+-		if (nvtBootloaderReset()) {
+-			IOLog("SWEET NVT: bootloader reset sent\n");
+-		} else {
+-			IOLog("SWEET NVT: bootloader reset failed; continuing\n");
+-		}
+-		if (!readChipTrim()) {
+-			IOLog("SWEET NVT: chip trim read failed\n");
++			IOLog("SWEET NVT: firmware load failed; probing running firmware\n");
+ 		}
++	} else {
++		IOLog("SWEET NVT: no firmware blob; probing running firmware\n");
+ 	}
++	(void)fwLoaded;
+ 	bool fwOk = false;
+ 	for (uint32_t attempt = 0; attempt < 3; attempt++) {
+ 		if (readFwInfo()) {
+@@ -296,16 +254,17 @@
+ bool
+ SweetNovatekTouch::nvtBootloaderReset()
+ {
+-	/* Linux nvt_bootloader_reset(): SWRST_N8_ADDR=0x03F0FE, 0x69,
+-	 * then disable SPI_RD_FAST at 0x03F310. */
+-	if (!writeData(0x03f0feu, 0x69u)) {
+-		IOLog("SWEET NVT: bootloader reset write failed\n");
+-		return false;
+-	}
+-	IODelay(5000);
++	/*
++	 * Working NT36672A SPI driver: do not write 0x69 to SWRST_N8_ADDR;
++	 * that resets the whole TDDI IC.  Just disable SPI fast-read so the
++	 * bootloader SRAM writes are accepted.  The controller is already in
++	 * ROM bootloader mode after the hardware panel reset.
++	 */
+ 	if (!writeData(0x03f310u, 0x00u)) {
+ 		IOLog("SWEET NVT: SPI_RD_FAST disable failed; continuing\n");
+ 	}
++	IODelay(5000);
++	IOLog("SWEET NVT: SPI_RD_FAST disabled (no SWRST_N8)\n");
+ 	return true;
+ }
+ 
+@@ -414,11 +373,19 @@
+ {
+ 	uint8_t zero = 0;
+ 	uint8_t cmd = 0xaeu;
++	/*
++	 * Route39: the working NT36672A SPI driver writes the 0xAE boot
++	 * command to EVENT_MAP_HOST_CMD (0x50), not to the handshake byte
++	 * at 0x51.  Route28-31 used 0x51, so the firmware CRC never ran and
++	 * reset state stayed 0x00 even though every SRAM write completed.
++	 */
+ 	if (!writeBuffer(NVT_RESET_STATE, &zero, 1) ||
+-	    !writeBuffer(NVT_EVENT_BUF | NVT_EVENT_HANDSHAKE, &cmd, 1)) {
++	    !writeBuffer(NVT_EVENT_BUF | NVT_EVENT_HOST_CMD, &cmd, 1)) {
+ 		IOLog("SWEET NVT: FW CRC enable failed\n");
+ 		return false;
+ 	}
++	IOLog("SWEET NVT: FW CRC host-cmd 0xae -> 0x%x\n",
++	    (unsigned)(NVT_EVENT_BUF | NVT_EVENT_HOST_CMD));
+ 	return true;
+ }
+ 
+@@ -438,7 +405,7 @@
+ SweetNovatekTouch::nvtCheckResetState(uint8_t state)
+ {
+ 	uint8_t info[6] = { 0 };
+-	for (uint32_t i = 0; i < 10; i++) {
++	for (uint32_t i = 0; i < 50; i++) {
+ 		if (readData(NVT_RESET_STATE, info, sizeof(info))) {
+ 			if (info[1] >= state && info[1] <= 0xafu) {
+ 				return true;
+@@ -513,9 +480,6 @@
+ 		IOLog("SWEET NVT: firmware bootloader reset failed\n");
+ 		return false;
+ 	}
+-	if (!nvtSetBldHwCrc()) {
+-		return false;
+-	}
+ 	for (uint32_t i = 0; i < sizeof(kNvtFwParts) / sizeof(kNvtFwParts[0]); i++) {
+ 		uint32_t size = kNvtFwParts[i].size;
+ 		if (size == 0) {
+@@ -534,6 +498,15 @@
+ 	}
+ 	IOLog("SWEET NVT: tail start after parts\n");
+ 
++	/*
++	 * Linux writes the BLD CRC descriptor banks after all SRAM parts,
++	 * then enables the CRC.  Route28 wrote them before the parts.
++	 */
++	if (!nvtSetBldHwCrc()) {
++		IOLog("SWEET NVT: BLD CRC bank write failed\n");
++		return false;
++	}
++
+ 	IOLog("SWEET NVT: tail bld-crc enter\n");
+ 	bool bldCrcOk = nvtBldCrcEnable();
+ 	IOLog("SWEET NVT: tail bld-crc ret=%u\n", bldCrcOk);
