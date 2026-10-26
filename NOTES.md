@@ -18,8 +18,9 @@
     `sweetnvt_fw=1` and `sweetnvt_fwload=1`.  The old route40 CMDLINE only has
     `sweetnvt_fw=1`, so it stays inert; a clean build must omit both.
 - Validation: patch applies to the route40 CI buildtree and the two changed
-  C++ files pass `xnu-cc.py` syntax check (`0 of 2 files failed`).  No image
-  built, no boot, no partition write.
+  C++ files pass `xnu-cc.py` syntax check (`0 of 2 files failed`).  CI
+  `40386274547` success (7m47s; `0120` applied).  No image built, no boot, no
+  partition write.
 - Next: build the clean baseline without firmware injection; do not boot until
   the human resets STATE and A3 is reflashed.
 
