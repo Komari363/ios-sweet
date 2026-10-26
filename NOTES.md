@@ -1,5 +1,21 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-26 18:13 — route32/33/34: firmware tail, manual CS, MISO
+
+- route32 (`0111`, `6bb79f3`): CI `40298138515` success; image
+  `f3ff7d64...`; A3 346.744 s; ring `d5cb1c6c...`.  Tail logs show
+  `bld-crc ret=1`, `fw-crc ret=1`, `boot-ready ret=1`,
+  `reset-state ret=0`, `firmware load complete`; reset state still `00`,
+  `xfer len=8` still `rx empty`.  route32 = 1/3.
+- route33 (`0112`, `18431d9`): CI `40300741642` success; image
+  `6e47a5fd...`; A3 351.734 s; ring `4e9305f0...`.  Manual CS0 low is
+  executed, but all RX remains empty; `short rx len=8 got=0`.
+  route33 = 2/3.
+- route34 (`0113`, `ee743ef`): samples GPIO25 (MISO) before and during
+  manual CS, and GPIO39 IRQ, then restores QUP18 mux.  CI `40306155570`.
+- Next: build route34 image with fw02 ADT, probe → TWRP→fastboot → A3 →
+  boot once → ring.  This is the last attempt of the current generation.
+
 ## 2026-10-26 16:21 — route29/30/31: fw02 and TLMM South fix
 
 - Human reset at 14:33: next generation = NVT fw02. `0108` (`30d39f1`)
