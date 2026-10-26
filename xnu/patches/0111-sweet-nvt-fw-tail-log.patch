@@ -1,0 +1,38 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -453,10 +453,33 @@
+ 		}
+ 		IOLog("SWEET NVT: firmware part %u written %u\n", i, size + 1);
+ 	}
+-	if (!nvtBldCrcEnable() || !nvtFwCrcEnable() || !nvtBootReady()) {
++	IOLog("SWEET NVT: tail start after parts\n");
++
++	IOLog("SWEET NVT: tail bld-crc enter\n");
++	bool bldCrcOk = nvtBldCrcEnable();
++	IOLog("SWEET NVT: tail bld-crc ret=%u\n", bldCrcOk);
++	if (!bldCrcOk) {
+ 		return false;
+ 	}
+-	if (!nvtCheckResetState(0xa0u)) {
++
++	IOLog("SWEET NVT: tail fw-crc enter\n");
++	bool fwCrcOk = nvtFwCrcEnable();
++	IOLog("SWEET NVT: tail fw-crc ret=%u\n", fwCrcOk);
++	if (!fwCrcOk) {
++		return false;
++	}
++
++	IOLog("SWEET NVT: tail boot-ready enter\n");
++	bool bootReadyOk = nvtBootReady();
++	IOLog("SWEET NVT: tail boot-ready ret=%u\n", bootReadyOk);
++	if (!bootReadyOk) {
++		return false;
++	}
++
++	IOLog("SWEET NVT: tail reset-state enter\n");
++	bool resetStateOk = nvtCheckResetState(0xa0u);
++	IOLog("SWEET NVT: tail reset-state ret=%u\n", resetStateOk);
++	if (!resetStateOk) {
+ 		IOLog("SWEET NVT: reset state unreadable; continuing\n");
+ 	}
+ 	return true;
