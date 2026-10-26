@@ -1,5 +1,23 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-26 22:16 — route35/36/37: NVT reset/power exhausted
+
+- route35 (`0114`, `41ad392`): GPIO75 South support and MISO pull-up sample.
+  CI `40322109861`; image `9fbd0b90...`; A3 347.858 s; ring `1f592589...`.
+  `reset75 idle/pulse=1`, MISO still `gpio25=0 pullup=1`; route35 = 1/3.
+- route36 (`0115`, `78439ae`): reset75 low, VDDIO off 200 ms, on 20 ms,
+  release reset.  CI `40326619463`; image `a7127f6f...`; A3 348.570 s;
+  ring `f120504e...`.  First boot `Too many links`, retry OK; MISO still
+  `0/pullup=1`; route36 = 2/3.
+- route37 (`0116`, `d511cda`): GPIO25 output high/low readback, then
+  reset75 low 100 ms, VDDIO off 1 s, on 100 ms, release reset.
+  CI `40332348845`; image `065ca050...`; A3 348.402 s; ring `3b6b4ff5...`.
+  `MISO drive high read=1`, `drive low read=0` (pad not shorted), but
+  released MISO still `0/pullup=1`; reset state `00`, no FWINFO.
+  route37 = 3/3; NVT reset/power generation exhausted.
+- Next: hardware-level NVT VDD/reset/MISO continuity, or known-good
+  touch module/cable.  Do not auto-open route38; STATE must be reset.
+
 ## 2026-10-26 18:13 — route32/33/34: firmware tail, manual CS, MISO
 
 - route32 (`0111`, `6bb79f3`): CI `40298138515` success; image
