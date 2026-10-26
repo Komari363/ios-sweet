@@ -1,0 +1,50 @@
+--- a/iokit/Kernel/arm/SweetPlatform.h
++++ b/iokit/Kernel/arm/SweetPlatform.h
+@@ -25,6 +25,7 @@
+ 	IOReturn setPad(uint32_t pin, uint32_t pull, uint32_t drive, bool output);
+ 	IOReturn gpioWrite(uint32_t pin, bool value);
+ 	bool gpioRead(uint32_t pin);
++	bool gpioReadOutput(uint32_t pin);
+ 
+ private:
+ 	IOMemoryMap *fMap;
+--- a/iokit/Kernel/arm/SweetPlatform.cpp
++++ b/iokit/Kernel/arm/SweetPlatform.cpp
+@@ -187,6 +187,16 @@
+ 		return false;
+ 	}
+ 	return (fBase[(reg + 4) / 4] & 1u) != 0;
++}
++
++bool
++SweetTLMM::gpioReadOutput(uint32_t pin)
++{
++	uint32_t reg = pinControl(pin);
++	if (fBase == NULL || reg == 0) {
++		return false;
++	}
++	return (fBase[(reg + 4) / 4] & (1u << 1)) != 0;
+ }
+ 
+ /* ------------------------------------------------------------------- GCC */
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -106,14 +106,14 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(4000);
+-	IOLog("SWEET NVT: vddio=%u irq=%u before power cycle\n",
+-	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
++	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u before power cycle\n",
++	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, false);
+ 	IODelay(10000);
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
+ 	IODelay(4000);
+-	IOLog("SWEET NVT: vddio=%u irq=%u after power cycle\n",
+-	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
++	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u after power cycle\n",
++	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 	OSData *fwBlob = OSDynamicCast(OSData,
+ 	    provider->getProperty("novatek,firmware"));
+ 	bool fwLoaded = false;
