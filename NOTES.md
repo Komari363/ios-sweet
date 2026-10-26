@@ -1,5 +1,30 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-27 02:00 — route39 result; route40 bootloader reset + host-cmd
+
+- route39 (`0118`, `4d259a8`): CI `40369696729` success; image
+  `31c6c467...`; booted 01:43:50.  Touch did not respond.
+- Ring `6c788028...` (`total 186,332 bytes, flush #29`):
+  `SWEET NVT: FW CRC host-cmd 0xae -> 0x2fe50` proves the write reached
+  `EVENT_MAP_HOST_CMD=0x50`, and `tail bld-crc/fw-crc/boot-ready ret=1`,
+  but `tail reset-state enter` is followed by
+  `rx empty len=8 got=0 ... cfg80=0x8c04 trans=0x0 mgp=8 sgp=0`,
+  `short rx len=8`, and no `reset state a0`, `firmware load complete`,
+  `fw=`, or `packets`.  route39 = 2/3.
+- The CMDLINE did include `sweetboot=1 sweetboot_delay_ms=300000`; ring
+  lines 127/131 show the timer armed.  The user did not test touch before
+  the 300 s window and later manually went to fastboot; this image is not
+  evidence that the delayed-reset thread is broken.
+- Root cause candidate for route40: route39 dropped `SWRST_N8=0x69` and
+  `nvt_eng_reset()` because the working NT36672A driver relies on a
+  hardware panel reset, but nabu has no enabled NVT reset GPIO in its
+  DTS.  Without SWRST_N8 the part can remain in application mode, making
+  every bootloader SRAM write a no-op.  The 0x50 host-command fix is kept.
+- route40 (`0119`): restore Linux `nvt_eng_reset()` (`0x5A` to
+  `0x7FFF80`), `SWRST_N8=0x69`, wait 5 ms, disable SPI_RD_FAST, then read
+  chip trim as a decisive bootloader probe; keep 0x50 for the firmware
+  CRC host command.  Patch generated; build/boot pending.
+
 ## 2026-10-27 01:15 — route38 result and route39 firmware parity
 
 - route38 (`0117`, `340b262`): CI `40355713691` success; image

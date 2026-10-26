@@ -1,0 +1,80 @@
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -100,12 +100,10 @@
+ 	}
+ 
+ 	/*
+-	 * Route39: the working NT36672A SPI driver relies on the hardware
+-	 * panel reset and never toggles a NVT reset GPIO or VDDIO.  Keep
+-	 * VDDIO high, do not power-cycle it, and do not drive GPIO75.
+-	 * Route35/36/37 left reset75 high and cut VDDIO for 1 s before every
+-	 * boot; that is not the Linux sequence and can leave the controller
+-	 * in reset.  Only read the pin state here.
++	 * Route40: keep the route39 VDDIO/no-GPIO75 policy, but restore the
++	 * Linux bootloader-reset writes.  nabu has no NVT reset GPIO in the
++	 * DTS, so without SWRST_N8 the controller remains in application
++	 * mode and every bootloader SRAM write is a no-op.
+ 	 */
+ 	fTLMM->setMux(NVT_VDDIO_GPIO, 0);
+ 	fTLMM->setPad(NVT_VDDIO_GPIO, 0, 3, true);
+@@ -114,7 +112,7 @@
+ 	fTLMM->setMux(NVT_IRQ_GPIO, 0);
+ 	fTLMM->setPad(NVT_IRQ_GPIO, 1, 0, false);
+ 	IODelay(10000);
+-	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u route39 no power cycle\n",
++	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u route40 swrst+host-cmd\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO),
+ 	    fTLMM->gpioRead(NVT_IRQ_GPIO));
+ 
+@@ -255,16 +253,22 @@
+ SweetNovatekTouch::nvtBootloaderReset()
+ {
+ 	/*
+-	 * Working NT36672A SPI driver: do not write 0x69 to SWRST_N8_ADDR;
+-	 * that resets the whole TDDI IC.  Just disable SPI fast-read so the
+-	 * bootloader SRAM writes are accepted.  The controller is already in
+-	 * ROM bootloader mode after the hardware panel reset.
++	 * Route40: route39 dropped SWRST_N8 because the working NT36672A
++	 * driver relies on a hardware panel reset.  nabu has no NVT reset
++	 * GPIO in its DTS, so without this write the part stays in
++	 * application mode.  Use the complete Linux nvt_bootloader_reset()
++	 * sequence: SWRST_N8=0x69, 5 ms, disable SPI_RD_FAST.
+ 	 */
++	if (!writeData(NVT_SWRST_N8, 0x69u)) {
++		IOLog("SWEET NVT: SWRST_N8 write failed\n");
++		return false;
++	}
++	IODelay(5000);
+ 	if (!writeData(0x03f310u, 0x00u)) {
+ 		IOLog("SWEET NVT: SPI_RD_FAST disable failed; continuing\n");
+ 	}
+ 	IODelay(5000);
+-	IOLog("SWEET NVT: SPI_RD_FAST disabled (no SWRST_N8)\n");
++	IOLog("SWEET NVT: bootloader reset 0x69 sent\n");
+ 	return true;
+ }
+ 
+@@ -476,10 +480,23 @@
+ 		IOLog("SWEET NVT: firmware end flag missing\n");
+ 		return false;
+ 	}
++	if (!nvtEngReset()) {
++		IOLog("SWEET NVT: firmware eng reset failed\n");
++		return false;
++	}
++	IODelay(10000);
+ 	if (!nvtBootloaderReset()) {
+ 		IOLog("SWEET NVT: firmware bootloader reset failed\n");
+ 		return false;
+ 	}
++	/*
++	 * Decisive bootloader probe: if chip trim still returns no RX after
++	 * SWRST_N8, the part never entered the ROM bootloader (power/reset/
++	 * MISO), and SRAM writes below cannot be trusted.
++	 */
++	if (!readChipTrim()) {
++		IOLog("SWEET NVT: bootloader chip trim read failed\n");
++	}
+ 	for (uint32_t i = 0; i < sizeof(kNvtFwParts) / sizeof(kNvtFwParts[0]); i++) {
+ 		uint32_t size = kNvtFwParts[i].size;
+ 		if (size == 0) {
