@@ -1,0 +1,49 @@
+diff --git a/iokit/Kernel/arm/SweetNovatekTouch.cpp b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+--- a/iokit/Kernel/arm/SweetNovatekTouch.cpp
++++ b/iokit/Kernel/arm/SweetNovatekTouch.cpp
+@@ -109,26 +109,38 @@ SweetNovatekTouch::start(IOService *provider)
+ 	IODelay(4000);
+ 	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u before power cycle\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+-	nvtSampleMiso("pre-power-seq");
++	nvtSampleMiso("pre-route37");
++	IOLog("SWEET NVT: MISO pad drive test\n");
++	fTLMM->setMux(25, 0);
++	fTLMM->setPad(25, 0, 3, true);
++	fTLMM->gpioWrite(25, true);
++	IODelay(1000);
++	IOLog("SWEET NVT: MISO drive high read=%u\n", fTLMM->gpioRead(25));
++	fTLMM->gpioWrite(25, false);
++	IODelay(1000);
++	IOLog("SWEET NVT: MISO drive low read=%u\n", fTLMM->gpioRead(25));
++	fTLMM->setMux(25, 3);
++	fTLMM->setPad(25, 0, 3, false);
++
+ 	IOLog("SWEET NVT: power seq assert reset75\n");
+ 	fTLMM->setMux(75, 0);
+ 	fTLMM->setPad(75, 0, 3, true);
+ 	fTLMM->gpioWrite(75, false);
+-	IODelay(10000);
+-	IOLog("SWEET NVT: power seq vddio off 200ms\n");
++	IODelay(100000);
++	IOLog("SWEET NVT: power seq vddio off 1s\n");
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, false);
+-	IODelay(200000);
++	IODelay(1000000);
+ 	IOLog("SWEET NVT: power seq vddio on\n");
+ 	fTLMM->gpioWrite(NVT_VDDIO_GPIO, true);
+-	IODelay(20000);
++	IODelay(100000);
+ 	IOLog("SWEET NVT: power seq release reset75\n");
+ 	fTLMM->gpioWrite(75, true);
+-	IODelay(50000);
++	IODelay(100000);
+ 	fTLMM->setMux(75, 0);
+ 	fTLMM->setPad(75, 3, 0, false);
+ 	IOLog("SWEET NVT: vddio in=%u out=%u irq=%u after power seq\n",
+ 	    fTLMM->gpioRead(NVT_VDDIO_GPIO), fTLMM->gpioReadOutput(NVT_VDDIO_GPIO), fTLMM->gpioRead(NVT_IRQ_GPIO));
+-	nvtSampleMiso("post-power-seq");
++	nvtSampleMiso("post-route37");
+ 	OSData *fwBlob = OSDynamicCast(OSData,
+ 	    provider->getProperty("novatek,firmware"));
+ 	bool fwLoaded = false;
