@@ -1,5 +1,19 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-27 11:08 — 0120 clean baseline image built (no boot)
+
+- CI `40386274547` success (head `643ebba`); kernel
+  `40a41dee53cbb51bd37cf944ed326b43d6a6d41f9486a58ab6b8edae4363e286`.
+- Built `output/a4.2/first-light-0120-clean-baseline/shim-boot.img`
+  (16,871,424 B, sha256 `1c0c750c...`); payload 16,684,304 B
+  (`307af1d3...`); ADT 13,860 B (`f8bcb580...`).  No fw01/fw02 injection.
+- CMDLINE omits `sweetnvt_fw` and `sweetnvt_fwload`; ADT has no
+  `novatek,firmware`.  `unpack_bootimg` says header v3; ramdisk matches the
+  payload.  The image is byte-size-identical to the earlier no-firmware
+  route38 image (16,871,424 B).
+- **No device command, no boot, no partition write.**  route38/39/40 = 3/3
+  stop remains in force; this is a clean baseline artifact, not route41.
+
 ## 2026-10-27 03:25 — static clean baseline patch (no boot)
 
 - Root docs frozen first: `665b37b` (`docs(touch): freeze static audit and fix
